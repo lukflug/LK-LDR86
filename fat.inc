@@ -1,0 +1,49 @@
+; SPDX-License-Identifier: MIT
+; FAT file system header
+; BIOS parameter block
+BPB:
+.OEM_NAME					equ 0x0003
+.SECTOR_SIZE				equ 0x000B
+.CLUSTER_SIZE				equ 0x000D
+.RESERVED_SECTORS			equ 0x000E
+.FAT_COUNT					equ 0x0010
+.ROOT_ENTRIES				equ 0x0011
+.SECTOR_COUNT				equ 0x0013
+.MEDIA_DESCRIPTOR			equ 0x0015
+.FAT_SIZE					equ 0x0016
+.SECTORS_PER_TRACK			equ 0x0018
+.HEAD_COUNT					equ 0x001A
+.HIDDEN_SECTORS				equ 0x001C
+.TOTAL_SECTORS_A			equ 0x001E
+.TOTAL_SECTORS_B			equ 0x0020
+.DRIVE_NUMBER				equ 0x0024
+.RESERVED_BYTE				equ 0x0025
+.EBPB_SIGNATURE				equ 0x0026
+.EBPB_SIGNATURE_A			equ 0x28
+.EBPB_SIGNATURE_B			equ 0x29
+.SERIAL_NUMBER				equ 0x0027
+.VOLUME_LABEL				equ 0x002B
+.FILE_SYSTEM				equ 0x0036
+.BPB_END					equ 0x003E
+
+; File allocation table
+FAT:
+.MIN_CLUSTER				equ 0x0002
+FAT12:
+.MAX_ALLOC_CLUSTER			equ 0x0FF0
+.MAX_CLUSTER				equ 0x0FF8
+.EOC_CLUSTER				equ 0x0FFF
+.CLUSTER_MASK				equ 0x0FFF
+
+; Directory entry
+FATEntry:
+.FILENAME					equ 0x0000
+.ATTRIBUTES					equ 0x000B
+.MODIFY_TIME				equ 0x0016
+.MODIFY_DATE				equ 0x0018
+.FIRST_CLUSTER				equ 0x001A
+.FILE_SIZE					equ 0x001C
+.SIZE						equ 0x0020
+.END						equ 0x00
+.DELETED					equ 0xE5
+.EPOCH						equ 1980
