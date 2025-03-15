@@ -167,7 +167,7 @@ readFile:
 			inc si															; Get first cluster
 			lodsw
 .clusterLoop	push ax
-				times 2 dec ax												; Check eof
+				times 2 dec ax												; Check EOF
 				cmp ax, FAT12.MAX_CLUSTER-FAT.MIN_CLUSTER
 				jae short .eof
 				mov cl, [sectorsPerCluster]									; Convert CN to LSN
@@ -176,15 +176,15 @@ readFile:
 				add ax, bp
 				mov dx, ax
 				pop ax
-				mov si, cx													; Save sectors per cluster
+				mov di, cx													; Save sectors per cluster
 
-				mov di, ax													; Calculate offset inside fat
-				shr di, 1
+				mov si, ax													; Calculate offset inside FAT
+				shr si, 1
 				pushf
-				add di, ax
-				cmp di, SECTOR_SIZE-1										; Check if it is still inside first sector
+				add si, ax
+				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
 				jae short .error
-				mov ax, [di+$$+SECTOR_SIZE]									; Get entry value
+				mov ax, [si+$$+SECTOR_SIZE]									; Get entry value
 				popf
 				jnc short .even
 				mov cl, 0x04
@@ -198,7 +198,7 @@ readFile:
 					pop ax
 					add bh, SECTOR_SIZE/256									; Increase buffer offset
 					inc ax													; Increase LSN
-					dec si
+					dec di
 					jnz short .sectorLoop
 				pop ax
 				jmp .clusterLoop
@@ -234,7 +234,7 @@ loadSector:
 			mov dh, al														; Set head number
 			mov dl, [reserved]												; Set drive number
 
-			mov di, 0x0003													; Reset error counter
+			mov si, 0x0003													; Reset error counter
 .read			mov ax, BIOS.DISK_READ1										; Read sector
 				push dx
 				stc
@@ -243,7 +243,7 @@ loadSector:
 				pop dx
 				jnc short .return
 
-.retry			dec di														; Retry 3 times (due to unreliability of floppy drives)
+.retry			dec si														; Retry 3 times (due to unreliability of floppy drives)
 				jz short .error
 				xor ah, ah													; Reset disk
 				int BIOS.DISK_INT
@@ -255,10 +255,11 @@ loadSector:
 
 .lba		xor si, si														; Construct DAP on stack
 			push si															; Higher dword of LBA = 0
+			push si
 			push dx															; Lower dword of LBA
 			push ax
 			push es															; Buffer address
-			push di
+			push bx
 			inc si															; Transfer one word
 			push si
 			mov cx, BIOS.DISK_DAP_SIZE										; Size of packet
@@ -272,7 +273,7 @@ loadSector:
 			jmp .return
 
 
-errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error', 0x0D, 0x0A, 0x00
 
 							times (BootSector.FILE0-BootSector.BASE)-($-$$) db 0x00
 file0						dw 0x0600

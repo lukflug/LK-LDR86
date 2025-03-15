@@ -19,14 +19,14 @@ all: $(IMGFILES)
 testqemu: img/1440kB.img
 	qemu-system-i386 -fda img/1440kB.img -soundhw pcspk
 
-testqemu-hdd: img/16384kB.img
-	qemu-system-i386 -hda img/16384kB.img -soundhw pcspk
-
 testbochs: img/1440kB.img
 	-bochs
 
+testbochs-hdd: img/16384kB.img
+	-bochs -f hdd.bochsrc
+
 $(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
-	-mkdosfs -Cvn $(VOLUME_LABEL) $@ $*
+	-mkdosfs -F 12 -Cvn $(VOLUME_LABEL) $@ $*
 	dd if=bin/boot.bin of=$@ bs=1 count=11 conv=notrunc
 	dd if=bin/boot.bin of=$@ bs=1 count=450 seek=62 skip=62 conv=notrunc
 	-mattrib -i $@ -r -s \*.\*
