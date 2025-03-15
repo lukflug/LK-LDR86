@@ -21,6 +21,7 @@ BIOS:
 .DISK_WRITE					equ 0x03
 .DISK_WRITE1				equ 0x0301
 .DISK_LBA_READ				equ 0x42
+.DISK_DAP_SIZE				equ 0x0010
 ; Serial I/O
 .COM_INT					equ 14h
 .COM_INIT					equ 0x00

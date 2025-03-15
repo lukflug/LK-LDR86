@@ -3,7 +3,7 @@
 ; Boot sector for volume boot record
 ; Loads two fragmented files, assumes 512 byte sectors, 2 FATs.
 ; Files must be located in first 32 root entries and must be below cluster 341.
-; Also must be in first 65536 sectors of volume!
+; Also everything must be in first 65536 sectors of partition!
 %include 'fat.inc'
 %include 'rombios.inc'
 %include 'boot.inc'
@@ -51,15 +51,17 @@ bootloader:
 			mov ss, ax
 			mov sp, $$
 			sti
+			mov [reserved], dl												; Save BIOS drive number
 
-			mov di, ax														; Set division exception handler
-			mov ax, loadSector.lba
-			stosw
-			xor ax, ax
-			stosw
+			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
+			mul word [headCount]
+			push ax
+			mov bx, 0x0400													; Calculate maximum LBA accessible via CHS
+			mul bx
+			push dx
+			push ax
 
-			mov [reserved], dl												; Try BIOS drive number first
-			call loadFiles
+			call loadFiles													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
 			mov [reserved], dl
 			call loadFiles
@@ -91,7 +93,8 @@ loadFiles:
 			mov cl, 0x04
 			shr bp, cl
 			add bp, ax
-			call loadTableSector											; Load directory sector
+			mov bx, $$-0x100-SECTOR_SIZE									; Load directory sector
+			call loadSector
 
 .dirEntryLoop	mov cx, 0x0002
 				mov di, file0+BootFile.FILENAME								; Check for first file
@@ -105,7 +108,8 @@ loadFiles:
 .return		ret
 
 .foundAll	mov ax, [reservedSectors]										; Load FAT
-			call loadTableSector
+			mov bx, $$+SECTOR_SIZE
+			call loadSector
 			mov si, file0													; Actually load the files
 			call readFile
 			mov si, file1
@@ -117,10 +121,9 @@ loadFiles:
 			mov di, [file0+BootFile.LOAD_OFFSET]
 .repeat			repne scasw
 				jcxz .return
-				cmp word [di], BootSector.BOOT_SIGNATURE
+				scasw
 				jne short .repeat
-			times 2 inc di													; Transfer control
-			jmp di
+			jmp di															; Transfer control
 
 
 ; Compare filename against directory entry
@@ -200,35 +203,36 @@ readFile:
 				pop ax
 				jmp .clusterLoop
 
-.error		mov sp, $$-0x0004
+.error		mov sp, $$-0x000A
 .eof		pop ax
 .return		ret
-
-
-; Load sector into area after bootloader
-; ax - LSN
-loadTableSector:
-			mov bx, $$+SECTOR_SIZE
 
 
 ; Convert LSN to CHS and load sector
 ; ax - LSN
 ; bx - Buffer offset
 loadSector:
+			xor dx, dx
 			add ax, [hiddenSectors]											; Convert LSN to LBA
-			mov dx, [hiddenSectors+2]										; ax = track = lba/sectorsPerTrack, dx = sector-1 = lba%sectorsPerTrack
-			div word [sectorsPerTrack]
-			inc dl															; Store sector number
-			mov cl, dl
-
-			xor dx, dx														; ax = cylinder = track/headCount, dx = head = track%headCount
-			div word [headCount]
-			mov dh, dl														; Set head number
-			mov dl, [reserved]												; Set drive number
+			adc dx, [hiddenSectors+0x0002]
+			cmp dx, [$$-0x0004]												; Check if doing CHS or LBA
+			ja short .lba
+			jb short .chs
+			cmp ax, [$$-0x0006]
+			jae short .lba
+.chs		div word [$$-0x0002]											; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
 			mov ch, al														; Set cylinder number
 			xor al, al
 			times 2 shr ax, 1
-			or cl, al
+			mov cl, al
+
+			mov ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
+			xor dx, dx
+			div word [sectorsPerTrack]
+			inc dl															; Store sector number
+			or cl, dl
+			mov dh, al														; Set head number
+			mov dl, [reserved]												; Set drive number
 
 			mov di, 0x0003													; Reset error counter
 .read			mov ax, BIOS.DISK_READ1										; Read sector
@@ -249,9 +253,7 @@ loadSector:
 .return		equ readFile.return
 .error		equ readFile.error
 
-.lba		add sp, 0x0004													; Discard interrupt stack
-			popf
-			xor si, si														; Construct DAP on stack
+.lba		xor si, si														; Construct DAP on stack
 			push si															; Higher dword of LBA = 0
 			push dx															; Lower dword of LBA
 			push ax
@@ -259,7 +261,7 @@ loadSector:
 			push di
 			inc si															; Transfer one word
 			push si
-			mov cx, 0x0010													; Size of packet
+			mov cx, BIOS.DISK_DAP_SIZE										; Size of packet
 			push cx
 			mov dl, [reserved]												; Set drive number
 			mov si, sp														; Invoke int 13h extension
@@ -270,7 +272,7 @@ loadSector:
 			jmp .return
 
 
-errorMessage				db 'Error! Press any key ...', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
 
 							times (BootSector.FILE0-BootSector.BASE)-($-$$) db 0x00
 file0						dw 0x0600
