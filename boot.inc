@@ -1,7 +1,9 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
 ; Boot sector interface header
-SECTOR_SIZE					equ 0x0200
+%ifndef SECTOR_SIZE
+%define SECTOR_SIZE 0x0200
+%endif
 
 ; Boot sector file structure
 BootFile:
@@ -14,8 +16,11 @@ BootFile:
 ; Boot sector structure
 BootSector:
 .BASE						equ 0x7C00
+.STACK_BASE					equ 0x8000
+.FAT_BUFFER					equ .BASE-SECTOR_SIZE
+.DIR_BUFFER					equ .BASE-2*SECTOR_SIZE
 .DRIVE_NUMBER				equ .BASE+BPB.RESERVED_BYTE
-.FILE0						equ .BASE+SECTOR_SIZE-0x0002-2*BootFile.SIZE
-.FILE1						equ .BASE+SECTOR_SIZE-0x0002-BootFile.SIZE
+.FILE0						equ .BASE+0x01FE-2*BootFile.SIZE
+.FILE1						equ .BASE+0x01FE-BootFile.SIZE
 .SIGNATURE					equ .BASE+SECTOR_SIZE-0x0002
 .BOOT_SIGNATURE				equ 0xAA55

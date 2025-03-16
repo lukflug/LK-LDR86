@@ -3,7 +3,8 @@
 ; Boot sector for volume boot record
 ; Loads two fragmented files, assumes 512 byte sectors, 2 FATs.
 ; Files must be located in first 32 root entries and must be below cluster 341.
-; Also everything must be in first 65536 sectors of partition!
+; Everything must be in first 65536 sectors of partition!
+; Files must be loaded below 0x7800 (otherwise they're truncated).
 %include 'fat.inc'
 %include 'rombios.inc'
 %include 'boot.inc'
@@ -48,8 +49,8 @@ bootloader:
 .jump		xor ax, ax														; Initialize segments and stack
 			mov ds, ax
 			mov es, ax
-			mov ss, ax
-			mov sp, $$
+			mov ss, ax														; Interrupts need to be disabled here to guard against early 8086/8088 bug lacking interrupt shadow (https://www.pcjs.org/documents/manuals/intel/8086/)
+			mov sp, BootSector.STACK_BASE
 			sti
 			mov [reserved], dl												; Save BIOS drive number
 
@@ -72,12 +73,12 @@ bootloader:
 				jz short .break
 				mov ah, BIOS.VIDEO_TTY										; Print character
 				xor bx, bx
-				int BIOS.VIDEO_INT
+				int BIOS.VIDEO_INT											; bp may not be preserved if it scrolls (http://www.ctyme.com/intr/rb-0106.htm)
 				jmp .loop
 .break		xor ah, ah														; Wait for key and boot to BASIC
 			int BIOS.KEY_INT
 			int BIOS.BASIC_INT
-			jmp $
+			jmp $															; Some BIOSes return on int 18h (http://www.ctyme.com/intr/rb-2241.htm)
 
 
 ; Load both source files
@@ -93,7 +94,7 @@ loadFiles:
 			mov cl, 0x04
 			shr bp, cl
 			add bp, ax
-			mov bx, $$-0x100-SECTOR_SIZE									; Load directory sector
+			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 			call loadSector
 
 .dirEntryLoop	mov cx, 0x0002
@@ -103,12 +104,12 @@ loadFiles:
 				call checkEntry
 				jcxz .foundAll
 				add bx, FATEntry.SIZE										; Go to next entry
-				test bh, (BootSector.BASE+2*SECTOR_SIZE)/256
-				jz short .dirEntryLoop
+				cmp bh, (BootSector.DIR_BUFFER+SECTOR_SIZE)/256
+				jb short .dirEntryLoop
 .return		ret
 
 .foundAll	mov ax, [reservedSectors]										; Load FAT
-			mov bx, $$+SECTOR_SIZE
+			mov bx, BootSector.FAT_BUFFER
 			call loadSector
 			mov si, file0													; Actually load the files
 			call readFile
@@ -146,13 +147,13 @@ checkEntry:
 			lea si, [bx+FATEntry.FIRST_CLUSTER]
 			movsw															; Get first cluster number
 
+%ifndef SECOND_FILE_FIXED
 			cmp di, file0+BootFile.FILE_SIZE								; Check if have to set the offset for the second file to the end of the first
-			jne short .skip
-			cmp word [file1+BootFile.LOAD_OFFSET], 0x0000
 			jne short .skip
 			mov ax, [file0+BootFile.LOAD_OFFSET]							; offset1 = offset0 + size0
 			add ax, [si]
 			mov [file1+BootFile.LOAD_OFFSET], ax
+%endif
 
 .skip		movsw															; Get file size
 .found		dec cx
@@ -184,7 +185,7 @@ readFile:
 				add si, ax
 				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
 				jae short .error
-				mov ax, [si+$$+SECTOR_SIZE]									; Get entry value
+				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
 				popf
 				jnc short .even
 				mov cl, 0x04
@@ -193,7 +194,9 @@ readFile:
 
 				push ax
 				mov ax, dx													; Get LSN
-.sectorLoop			push ax
+.sectorLoop			cmp bh, BootSector.DIR_BUFFER/256						; If read would overflow (e.g. the cluster size is really large), assume EOF
+					je short .eof
+					push ax
 					call loadSector											; Load sector
 					pop ax
 					add bh, SECTOR_SIZE/256									; Increase buffer offset
@@ -203,7 +206,7 @@ readFile:
 				pop ax
 				jmp .clusterLoop
 
-.error		mov sp, $$-0x000A
+.error		mov sp, BootSector.STACK_BASE-0x000A
 .eof		pop ax
 .return		ret
 
@@ -215,12 +218,12 @@ loadSector:
 			xor dx, dx
 			add ax, [hiddenSectors]											; Convert LSN to LBA
 			adc dx, [hiddenSectors+0x0002]
-			cmp dx, [$$-0x0004]												; Check if doing CHS or LBA
+			cmp dx, [BootSector.STACK_BASE-0x0004]							; Check if doing CHS or LBA
 			ja short .lba
 			jb short .chs
-			cmp ax, [$$-0x0006]
+			cmp ax, [BootSector.STACK_BASE-0x0006]
 			jae short .lba
-.chs		div word [$$-0x0002]											; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
+.chs		div word [BootSector.STACK_BASE-0x0002]							; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
 			mov ch, al														; Set cylinder number
 			xor al, al
 			times 2 shr ax, 1
@@ -235,7 +238,7 @@ loadSector:
 			mov dl, [reserved]												; Set drive number
 
 			mov si, 0x0003													; Reset error counter
-.read			mov ax, BIOS.DISK_READ1										; Read sector
+.read			mov ax, BIOS.DISK_READ1										; Read sector (and guard against various int 13h bugs, http://www.ctyme.com/intr/rb-0607.htm)
 				push dx
 				stc
 				int BIOS.DISK_INT
@@ -243,7 +246,7 @@ loadSector:
 				pop dx
 				jnc short .return
 
-.retry			dec si														; Retry 3 times (due to unreliability of floppy drives)
+.retry			dec si														; Retry 3 times (due to unreliability of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
 				jz short .error
 				xor ah, ah													; Reset disk
 				int BIOS.DISK_INT
@@ -273,7 +276,7 @@ loadSector:
 			jmp .return
 
 
-errorMessage				db 'Error', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
 
 							times (BootSector.FILE0-BootSector.BASE)-($-$$) db 0x00
 file0						dw 0x0600

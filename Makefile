@@ -26,11 +26,11 @@ testbochs-hdd: img/16384kB.img
 	-bochs -f hdd.bochsrc
 
 $(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
-	-mkdosfs -F 12 -Cvn $(VOLUME_LABEL) $@ $*
+	-rm -v $@
+	mkdosfs -F 12 -Cvn $(VOLUME_LABEL) $@ $*
 	dd if=bin/boot.bin of=$@ bs=1 count=11 conv=notrunc
 	dd if=bin/boot.bin of=$@ bs=1 count=450 seek=62 skip=62 conv=notrunc
-	-mattrib -i $@ -r -s \*.\*
-	if [ -n "$(filter-out $(EXCLUDE_BIN) img, $?)" ]; then mcopy -D o -onvi $@ $(filter-out $(EXCLUDE_BIN) img, $?) ::/; fi
+	mcopy -D o -onvi $@ $(filter-out $(EXCLUDE_BIN) img, $^) ::/
 	mattrib -i $@ -a +r \*.\*
 	mattrib -i $@ +s lkldr.bin lkldr.fs
 
