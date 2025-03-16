@@ -280,7 +280,7 @@ errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
 
 							times (BootSector.FILE0-BootSector.BASE)-($-$$) db 0x00
 file0						dw 0x0600
-							db 'LKLDR   BIN'
+							db 'LKLDR86 BIN'
 file1						dw 0x0000
 							db 'LKLDR   FS '
 							dw BootSector.BOOT_SIGNATURE

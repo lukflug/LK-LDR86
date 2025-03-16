@@ -1,5 +1,5 @@
 
-ASM_SRC = boot.asm lkldr.asm
+ASM_SRC = boot.asm lkldr86.asm
 DOCS = $(wildcard doc/*)
 
 BUILD_DIRS = img bin dep
@@ -32,7 +32,7 @@ $(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
 	dd if=bin/boot.bin of=$@ bs=1 count=450 seek=62 skip=62 conv=notrunc
 	mcopy -D o -onvi $@ $(filter-out $(EXCLUDE_BIN) img, $^) ::/
 	mattrib -i $@ -a +r \*.\*
-	mattrib -i $@ +s lkldr.bin lkldr.fs
+	mattrib -i $@ +s lkldr86.bin lkldr.fs
 
 $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
 	$(ASM)
