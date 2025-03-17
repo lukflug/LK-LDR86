@@ -9,6 +9,11 @@
 %include 'rombios.inc'
 %include 'boot.inc'
 
+%ifndef FILE_COUNT
+%define FILE_COUNT 0x0002
+%endif
+%define FAT12
+
 use16
 cpu 8086
 org BootSector.BASE
@@ -44,7 +49,7 @@ fileSystem					db 'FAT12   '
 bootloader:
 			cli
 			cld
-			jmp 0x0000:.jump												; Force code sgement to 0, because BIOS might use 0x07C0:0x0000 instead of 0x0000:0x7C00
+			jmp 0x0000:.jump												; Force code segment to 0, because BIOS might use 0x07C0:0x0000 instead of 0x0000:0x7C00
 
 .jump		xor ax, ax														; Initialize segments and stack
 			mov ds, ax
@@ -91,17 +96,20 @@ loadFiles:
 			shl ax, 1
 			add ax, [reservedSectors]
 			mov bp, [rootEntries]											; Calculate LSN of first data cluster
-			mov cl, 0x04
+			add bp, SECTOR_SIZE/FATEntry.SIZE-1
+			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
 			shr bp, cl
 			add bp, ax
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 			call loadSector
 
-.dirEntryLoop	mov cx, 0x0002
+.dirEntryLoop	mov cx, FILE_COUNT
 				mov di, file0+BootFile.FILENAME								; Check for first file
 				call checkEntry
+%if FILE_COUNT > 1
 				mov di, file1+BootFile.FILENAME								; Check for second file
 				call checkEntry
+%endif
 				jcxz .foundAll
 				add bx, FATEntry.SIZE										; Go to next entry
 				cmp bh, (BootSector.DIR_BUFFER+SECTOR_SIZE)/256
@@ -113,8 +121,10 @@ loadFiles:
 			call loadSector
 			mov si, file0													; Actually load the files
 			call readFile
+%if FILE_COUNT > 1
 			mov si, file1
 			call readFile
+%endif
 
 			mov ax, BootSector.BOOT_SIGNATURE								; Scan for entry point
 			mov cx, [file0+BootFile.FILE_SIZE]
@@ -147,12 +157,14 @@ checkEntry:
 			lea si, [bx+FATEntry.FIRST_CLUSTER]
 			movsw															; Get first cluster number
 
+%if FILE_COUNT > 1
 %ifndef SECOND_FILE_FIXED
 			cmp di, file0+BootFile.FILE_SIZE								; Check if have to set the offset for the second file to the end of the first
 			jne short .skip
 			mov ax, [file0+BootFile.LOAD_OFFSET]							; offset1 = offset0 + size0
 			add ax, [si]
 			mov [file1+BootFile.LOAD_OFFSET], ax
+%endif
 %endif
 
 .skip		movsw															; Get file size
@@ -179,6 +191,7 @@ readFile:
 				pop ax
 				mov di, cx													; Save sectors per cluster
 
+%ifdef FAT12
 				mov si, ax													; Calculate offset inside FAT
 				shr si, 1
 				pushf
@@ -191,6 +204,13 @@ readFile:
 				mov cl, 0x04
 				shr ax, cl
 .even			and ax, FAT12.CLUSTER_MASK
+%elifdef FAT16
+				mov si, ax													; Calculate offset inside FAT
+				shl si, 1
+				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
+				jae short .error
+				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
+%endif
 
 				push ax
 				mov ax, dx													; Get LSN

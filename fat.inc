@@ -34,6 +34,11 @@ FAT12:
 .MAX_CLUSTER				equ 0x0FF8
 .EOC_CLUSTER				equ 0x0FFF
 .CLUSTER_MASK				equ 0x0FFF
+FAT16:
+.MAX_ALLOC_CLUSTER			equ 0xFFF0
+.MAX_CLUSTER				equ 0xFFF8
+.EOC_CLUSTER				equ 0xFFFF
+.CLUSTER_MASK				equ 0xFFFF
 
 ; Directory entry
 FATEntry:
@@ -44,6 +49,7 @@ FATEntry:
 .FIRST_CLUSTER				equ 0x001A
 .FILE_SIZE					equ 0x001C
 .SIZE						equ 0x0020
+.SHIFT						equ 0x05
 .END						equ 0x00
 .DELETED					equ 0xE5
 .EPOCH						equ 1980

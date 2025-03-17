@@ -3,6 +3,7 @@
 ; Boot sector interface header
 %ifndef SECTOR_SIZE
 %define SECTOR_SIZE 0x0200
+%define SECTOR_SHIFT 0x09
 %endif
 
 ; Boot sector file structure
