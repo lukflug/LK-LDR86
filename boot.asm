@@ -12,7 +12,9 @@
 %ifndef FILE_COUNT
 %define FILE_COUNT 0x0002
 %endif
-%define FAT12
+%ifndef FAT_TYPE
+%define FAT_TYPE 12
+%endif
 
 use16
 cpu 8086
@@ -181,7 +183,13 @@ readFile:
 			lodsw
 .clusterLoop	push ax
 				times 2 dec ax												; Check EOF
+%if FAT_TYPE == 12
 				cmp ax, FAT12.MAX_CLUSTER-FAT.MIN_CLUSTER
+%elif FAT_TYPE == 16
+				cmp ax, FAT16.MAX_CLUSTER-FAT.MIN_CLUSTER
+%else
+%error "FAT_TYPE must be 12, 16, or 32!"
+%endif
 				jae short .eof
 				mov cl, [sectorsPerCluster]									; Convert CN to LSN
 				xor ch, ch
@@ -191,7 +199,7 @@ readFile:
 				pop ax
 				mov di, cx													; Save sectors per cluster
 
-%ifdef FAT12
+%if FAT_TYPE == 12
 				mov si, ax													; Calculate offset inside FAT
 				shr si, 1
 				pushf
@@ -204,12 +212,14 @@ readFile:
 				mov cl, 0x04
 				shr ax, cl
 .even			and ax, FAT12.CLUSTER_MASK
-%elifdef FAT16
+%elif FAT_TYPE == 16
 				mov si, ax													; Calculate offset inside FAT
 				shl si, 1
 				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
 				jae short .error
 				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
+%else
+%error "FAT_TYPE must be 12, 16, or 32!"
 %endif
 
 				push ax
