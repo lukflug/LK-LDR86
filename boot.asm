@@ -62,7 +62,7 @@ bootloader:
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			push ax
-			mov bx, 0x0400													; Calculate maximum LBA accessible via CHS
+			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
 			mul bx
 			push dx
 			push ax
