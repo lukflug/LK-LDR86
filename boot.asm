@@ -1,7 +1,8 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
 ; Boot sector for volume boot record
-; Loads two fragmented files, assumes 512 byte sectors, 2 FATs.
+; Loads two fragmented files, assumes exactly 2 FATs.
+; Assumes logical FAT sectors correspond to int 13h sectors.
 ; Files must be located in first 32 root entries and must be below cluster 341.
 ; Everything must be in first 65536 sectors of partition!
 ; Files must be loaded below 0x7800 (otherwise they're truncated).
@@ -64,10 +65,10 @@ bootloader:
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			push ax
-			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
-			mul bx
-			push dx
-			push ax
+;			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
+;			mul bx
+;			push dx
+;			push ax
 
 			call loadFiles													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
@@ -114,7 +115,7 @@ loadFiles:
 %endif
 				jcxz .foundAll
 				add bx, FATEntry.SIZE										; Go to next entry
-				cmp bh, (BootSector.DIR_BUFFER+SECTOR_SIZE)/256
+				cmp bh, (BootSector.DIR_BUFFER+SECTOR_SIZE) >> 8
 				jb short .dirEntryLoop
 .return		ret
 
@@ -218,18 +219,29 @@ readFile:
 				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
 				jae short .error
 				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
+%elif FAT_TYPE == 32
+				mov si, ax													; Calculate offset inside FAT
+				times 2 shl si, 1
+				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
+				jae short .error
+				add si, BootSector.FAT_BUFFER								; Load FAT entry
+				lodsw
+				mov cx, ax
+				lodsw
+				and ax, FAT32.CLUSTER_MASK >> 16
+				jz short .in_range
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
 
 				push ax
 				mov ax, dx													; Get LSN
-.sectorLoop			cmp bh, BootSector.DIR_BUFFER/256						; If read would overflow (e.g. the cluster size is really large), assume EOF
+.sectorLoop			cmp bh, BootSector.DIR_BUFFER >> 8						; If read would overflow (e.g. the cluster size is really large), assume EOF
 					je short .eof
 					push ax
 					call loadSector											; Load sector
 					pop ax
-					add bh, SECTOR_SIZE/256									; Increase buffer offset
+					add bh, SECTOR_SIZE >> 8								; Increase buffer offset
 					inc ax													; Increase LSN
 					dec di
 					jnz short .sectorLoop
