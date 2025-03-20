@@ -14,7 +14,7 @@
 %define FILE_COUNT 0x0002
 %endif
 %ifndef FAT_TYPE
-%define FAT_TYPE 12
+%define FAT_TYPE 32
 %endif
 
 use16
@@ -38,10 +38,18 @@ sectorsPerFAT				dw 0x0009
 sectorsPerTrack				dw 0x0012
 headCount					dw 0x0002
 hiddenSectors				dd 0x00000000
-totalSectors				dd 0x00000000
+sectorCount32				dd 0x00000000
+%if FAT_TYPE == 32
+sectorsPerFAT32				dd 0x00000000
+mirroringFlags				dw 0x0000
+fat32Version				dw 0x0000
+rootCluster					dd 0x00000000
+fsInfoSector				dd 0x00000000
+reservedBytes				times 12 db 0x00
+%endif
 driveNumber					db 0x00
 reserved					db 0x00
-bootSignature				db BPB.EBPB_SIGNATURE_B
+bootSignature				db EBPB.EBPB_SIGNATURE_B
 serialNumber				dd 0x00000000
 volumeLabel					db 'LKLDR86    '
 fileSystem					db 'FAT12   '
@@ -65,10 +73,10 @@ bootloader:
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			push ax
-;			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
-;			mul bx
-;			push dx
-;			push ax
+			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
+			mul bx
+			push dx
+			push ax
 
 			call loadFiles													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
@@ -90,11 +98,11 @@ bootloader:
 
 
 ; Load both source files
-; dl - Drive number
 loadFiles:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
+%if FAT_TYPE != 32
 			mov ax, [sectorsPerFAT]											; Calculate LSN of first directory entry
 			shl ax, 1
 			add ax, [reservedSectors]
@@ -103,6 +111,16 @@ loadFiles:
 			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
 			shr bp, cl
 			add bp, ax
+%else
+			mov bp, [sectorsPerFAT]											; Calculate LSN of first data cluster
+			shl bp, 1
+			add bp, [reservedSectors]
+			mov ax, [rootCluster]											; Get first LSN of root directory
+			mov bl, [sectorsPerCluster]
+			xor bh, bh
+			mul bx
+			add ax, bp
+%endif
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 			call loadSector
 
@@ -142,6 +160,7 @@ loadFiles:
 
 ; Compare filename against directory entry
 ; bx - Pointer to entry
+; cx - Number of files yet to be found
 ; di - Pointer to filename
 checkEntry:
 			cmp byte [di], 0x00												; Check if filename already found
@@ -157,6 +176,10 @@ checkEntry:
 
 			xor al, al														; Mark file as found
 			stosb
+%if FAT_TYPE == 32
+			cmp word [bx+FATEntry.FIRST_CLUSTER_HIGH], 0x0000
+			jne short .error
+%endif
 			lea si, [bx+FATEntry.FIRST_CLUSTER]
 			movsw															; Get first cluster number
 
@@ -173,10 +196,12 @@ checkEntry:
 .skip		movsw															; Get file size
 .found		dec cx
 .return		ret
+.error		equ readFile.error
 
 
 ; Read a file into memory
 ; si - Pointer to file offset
+; bp - First LSN of first data cluster
 readFile:
 			lodsw															; Get offset
 			mov bx, ax
@@ -185,13 +210,17 @@ readFile:
 .clusterLoop	push ax
 				times 2 dec ax												; Check EOF
 %if FAT_TYPE == 12
-				cmp ax, FAT12.MAX_CLUSTER-FAT.MIN_CLUSTER
+				cmp ax, FAT12.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
+				jae short .eof
 %elif FAT_TYPE == 16
-				cmp ax, FAT16.MAX_CLUSTER-FAT.MIN_CLUSTER
+				cmp ax, FAT16.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
+				jae short .eof
+%elif FAT_TYPE == 32
+				cmp ax, -FAT.MIN_CLUSTER
+				jae short .eof
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
-				jae short .eof
 				mov cl, [sectorsPerCluster]									; Convert CN to LSN
 				xor ch, ch
 				mul cx
@@ -216,20 +245,29 @@ readFile:
 %elif FAT_TYPE == 16
 				mov si, ax													; Calculate offset inside FAT
 				shl si, 1
-				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
+				jc short .error												; Check if it is still inside first sector
+				cmp si, SECTOR_SIZE-1
 				jae short .error
 				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
 %elif FAT_TYPE == 32
 				mov si, ax													; Calculate offset inside FAT
-				times 2 shl si, 1
-				cmp si, SECTOR_SIZE-1										; Check if it is still inside first sector
+				shl si, 1
+				jc short .error												; Check if it is still inside first sector
+				shl si, 1
+				jc short .error
+				cmp si, SECTOR_SIZE-1
 				jae short .error
 				add si, BootSector.FAT_BUFFER								; Load FAT entry
 				lodsw
-				mov cx, ax
-				lodsw
-				and ax, FAT32.CLUSTER_MASK >> 16
+				mov cx, [si]
+				and cx, FAT32.CLUSTER_MASK >> 16							; Check if upper 12 bits are zero
 				jz short .in_range
+				xor cx, FAT32.CLUSTER_MASK >> 16							; Check if EOF
+				jnz short .out_of_range
+				test ax, ~FAT32.MIN_EOC_CLUSTER
+				jnz short .return
+.out_of_range	mov ax, 0x8000
+.in_range:
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
@@ -324,5 +362,5 @@ errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
 file0						dw 0x0600
 							db 'LKLDR86 BIN'
 file1						dw 0x0000
-							db 'LKLDR   FS '
+							db 'BOOT    ASM'
 							dw BootSector.BOOT_SIGNATURE
