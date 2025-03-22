@@ -70,13 +70,11 @@ bootloader:
 			sti
 			mov [reserved], dl												; Save BIOS drive number
 
+			push dx
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
+			pop dx
 			push ax
-			;mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
-			;mul bx
-			;push dx
-			;push ax
 
 			call loadFiles													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
@@ -103,7 +101,8 @@ loadFiles:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
-			mov byte [loadSector.patch], 0x00
+			mov si, loadSector.patch+0x0001
+			mov byte [si], 0x00
 			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
 			mov bx, BIOS.DISK_LBA_CHECK_IN
 			int BIOS.DISK_INT
@@ -111,22 +110,27 @@ loadFiles:
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
 
-			mov byte [loadSector.patch], loadSector.lba-loadSector.chs
+			mov byte [si], loadSector.lba-loadSector.chs
 
-.chs:
+.chs		mov ax, [reservedSectors]										; Load FAT
+			push ax
+			mov bx, BootSector.FAT_BUFFER
+			call loadSector
+			pop bp
+
 %if FAT_TYPE != 32
 			mov ax, [sectorsPerFAT]											; Calculate LSN of first directory entry
 			shl ax, 1
-			add ax, [reservedSectors]
+			add ax, bp
 			mov bp, [rootEntries]											; Calculate LSN of first data cluster
 			add bp, SECTOR_SIZE/FATEntry.SIZE-1
 			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
 			shr bp, cl
 			add bp, ax
 %else
-			mov bp, [sectorsPerFAT]											; Calculate LSN of first data cluster
-			shl bp, 1
-			add bp, [reservedSectors]
+			mov ax, [sectorsPerFAT]											; Calculate LSN of first data cluster
+			shl ax, 1
+			add bp, ax
 			mov ax, [rootCluster]											; Get first LSN of root directory
 			mov bl, [sectorsPerCluster]
 			xor bh, bh
@@ -149,10 +153,7 @@ loadFiles:
 				jb short .dirEntryLoop
 .return		ret
 
-.foundAll	mov ax, [reservedSectors]										; Load FAT
-			mov bx, BootSector.FAT_BUFFER
-			call loadSector
-			mov si, file0													; Actually load the files
+.foundAll	mov si, file0													; Actually load the files
 			call readFile
 %if FILE_COUNT > 1
 			mov si, file1
@@ -197,10 +198,8 @@ checkEntry:
 
 %if FILE_COUNT > 1
 %ifndef SECOND_FILE_FIXED
-			cmp di, file0+BootFile.FILE_SIZE								; Check if have to set the offset for the second file to the end of the first
-			jne short .skip
 			mov ax, [file0+BootFile.LOAD_OFFSET]							; offset1 = offset0 + size0
-			add ax, [si]
+			add ax, [file0+BootFile.FILE_SIZE]
 			mov [file1+BootFile.LOAD_OFFSET], ax
 %endif
 %endif
@@ -310,11 +309,6 @@ loadSector:
 			xor dx, dx
 			add ax, [hiddenSectors]											; Convert LSN to LBA
 			adc dx, [hiddenSectors+0x0002]
-			;cmp dx, [BootSector.STACK_BASE-0x0004]							; Check if doing CHS or LBA
-			;ja short .lba
-			;jb short .chs
-			;cmp ax, [BootSector.STACK_BASE-0x0006]
-			;jae short .lba
 .patch		jmp short .chs
 
 .chs		div word [BootSector.STACK_BASE-0x0002]							; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
@@ -367,10 +361,10 @@ loadSector:
 			int BIOS.DISK_INT
 			jc short .error													; Don't retry, as we assume that floppies don't support LBA
 			add sp, cx														; Clean stack
-			jmp .return
+			ret
 
 
-errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error!';, 0x0D, 0x0A, 0x00
 
 							times (BootSector.FILE0-BootSector.BASE)-($-$$) db 0x00
 file0						dw 0x0600
