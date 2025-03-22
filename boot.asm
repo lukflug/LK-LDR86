@@ -14,7 +14,7 @@
 %define FILE_COUNT 0x0002
 %endif
 %ifndef FAT_TYPE
-%define FAT_TYPE 32
+%define FAT_TYPE 12
 %endif
 
 use16
@@ -73,10 +73,10 @@ bootloader:
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			push ax
-			mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
-			mul bx
-			push dx
-			push ax
+			;mov bx, BIOS.DISK_CHS_MAX_CYLINDERS								; Calculate maximum LBA accessible via CHS
+			;mul bx
+			;push dx
+			;push ax
 
 			call loadFiles													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
@@ -98,10 +98,22 @@ bootloader:
 
 
 ; Load both source files
+; dl - drive number
 loadFiles:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
+			mov byte [loadSector.patch], 0x00
+			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
+			mov bx, BIOS.DISK_LBA_CHECK_IN
+			int BIOS.DISK_INT
+			jc short .chs
+			cmp bx, BIOS.DISK_LBA_CHECK_OUT
+			jne short .chs
+
+			mov byte [loadSector.patch], loadSector.lba-loadSector.chs
+
+.chs:
 %if FAT_TYPE != 32
 			mov ax, [sectorsPerFAT]											; Calculate LSN of first directory entry
 			shl ax, 1
@@ -286,7 +298,7 @@ readFile:
 				pop ax
 				jmp .clusterLoop
 
-.error		mov sp, BootSector.STACK_BASE-0x000A
+.error		mov sp, BootSector.STACK_BASE-0x0006
 .eof		pop ax
 .return		ret
 
@@ -298,11 +310,13 @@ loadSector:
 			xor dx, dx
 			add ax, [hiddenSectors]											; Convert LSN to LBA
 			adc dx, [hiddenSectors+0x0002]
-			cmp dx, [BootSector.STACK_BASE-0x0004]							; Check if doing CHS or LBA
-			ja short .lba
-			jb short .chs
-			cmp ax, [BootSector.STACK_BASE-0x0006]
-			jae short .lba
+			;cmp dx, [BootSector.STACK_BASE-0x0004]							; Check if doing CHS or LBA
+			;ja short .lba
+			;jb short .chs
+			;cmp ax, [BootSector.STACK_BASE-0x0006]
+			;jae short .lba
+.patch		jmp short .chs
+
 .chs		div word [BootSector.STACK_BASE-0x0002]							; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
 			mov ch, al														; Set cylinder number
 			xor al, al
