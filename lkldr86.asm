@@ -21,4 +21,4 @@ org 0x0600
 				jmp .loop
 .break		jmp $
 
-message:
+message						db 'Hello world!', 0x0D, 0x0A, 0x00

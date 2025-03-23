@@ -25,7 +25,7 @@ testbochs: img/1440kB.img
 testbochs-hdd: img/65536kB.img
 	-bochs -f hdd.bochsrc
 
-$(IMGFILES): img/%kB.img: $(ASM_BIN) boot.asm | img
+$(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
 	-rm -v $@
 	mkdosfs -F 12 -Cvn $(VOLUME_LABEL) $@ $*
 	dd if=bin/boot.bin of=$@ bs=1 count=11 conv=notrunc
@@ -33,7 +33,7 @@ $(IMGFILES): img/%kB.img: $(ASM_BIN) boot.asm | img
 #	dd if=bin/boot.bin of=$@ bs=1 count=422 seek=90 skip=90 conv=notrunc
 	mcopy -D o -onvi $@ $(filter-out $(EXCLUDE_BIN) img, $^) ::/
 	mattrib -i $@ -a +r \*.\*
-	mattrib -i $@ +s lkldr86.bin boot.asm
+	mattrib -i $@ +s lkldr86.bin lkldr.fs
 
 $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
 	$(ASM)
