@@ -16,6 +16,7 @@ org 0x0600
 			mov di, BootSector.FILE_NAME
 			mov cx, 11
 			rep movsb
+			mov bx, BootSector.DIR_BUFFER
 			call BootSector.ENTRY_POINT
 
 			mov si, message													; Display message

@@ -108,7 +108,7 @@ loadFile:
 			jc short .chs
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
-			mov byte [si], loadSector.lba-loadSector.chs					; Set to CHS if supported
+			mov byte [si], loadSector.lba-loadSector.chs					; Set to LBA if supported
 
 .chs		mov ax, [reservedSectors]										; Load FAT
 			mov bp, ax
