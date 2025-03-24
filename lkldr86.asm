@@ -11,6 +11,13 @@ org 0x0600
 
 							dw BootSector.BOOT_SIGNATURE, BootSector.BOOT_SIGNATURE
 
+			mov word [BootSector.LOAD_OFFSET], message						; Load after end of file
+			mov si, file													; Copy file name	
+			mov di, BootSector.FILE_NAME
+			mov cx, 11
+			rep movsb
+			call BootSector.ENTRY_POINT
+
 			mov si, message													; Display message
 .loop			lodsb														; Get next byte
 				test al, al													; Check if zero
@@ -21,4 +28,6 @@ org 0x0600
 				jmp .loop
 .break		jmp $
 
-message						db 'Hello world!', 0x0D, 0x0A, 0x00
+file					db 'LKLDR   FS '
+
+message:
