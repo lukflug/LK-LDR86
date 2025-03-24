@@ -1,11 +1,14 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
 ; Boot sector for volume boot record
-; Loads one fragmented file, assumes exactly 2 FATs.
-; Assumes logical FAT sectors correspond to int 13h sectors.
-; Files must be located in first 32 root entries and must be below cluster 341.
-; Everything must be in first 65536 sectors of partition!
-; Files must be loaded below 0x7800.
+; Loads a fragmented file on a FAT12, FAT16, or FAT32 partition. Assumes:
+; - logical sector size = int 13h sector size
+; - exactly two FATs
+; - directory entry of file located in first sector of root directory (i.e. first 32 entries)
+; - FAT chain of file is fully contained within the first sector of the FAT
+; - everything must be within the first 65536 sectors of partition
+; - files must be loaded below 0x7800
+; Scans to find signature 0xAA55AA55 preceding entry point.
 %include 'fat.inc'
 %include 'rombios.inc'
 %include 'boot.inc'
@@ -52,8 +55,11 @@ volumeLabel					db 'LKLDR86    '
 fileSystem					db 'FAT12   '
 
 
-; Set up segment registers and stack and pre-calculate LSN of relevant structures.
+; Set up segment registers and stack and calculate sectors per cylinder
+; Attempt to load file first using drive number passed by BIOS, then drive number in BPB
+; If it fails, display error message, wait for key stroke, and run int 18h
 ; dl - boot drive number
+; Never returns
 bootloader:
 			cli
 			cld
@@ -94,8 +100,11 @@ bootloader:
 			jmp $															; Some BIOSes return on int 18h (http://www.ctyme.com/intr/rb-2241.htm)
 
 
-; Load both source files
+; Load FAT and directory sectors, and read out file
 ; dl - drive number
+; [BootSector.BOOT_DRIVE] - drive number
+; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
+; Only returns on error
 loadFile:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
@@ -156,7 +165,11 @@ loadFile:
 
 
 ; Read file
-; bx - directory buffer
+; bx = BootSector.DIR_BUFFER
+; [BootSector.BOOT_DRIVE] - drive number
+; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
+; [BootSector.FIRST_DATA_CLUSTER] - LSN of cluster 2 (first cluster of data area)
+; cf - set on error; clear otherwise
 readFile:
 .dirEntryLoop	mov di, fileName											; Compare filenames
 				mov si, bx
