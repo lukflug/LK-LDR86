@@ -169,6 +169,8 @@ loadFile:
 ; [BootSector.BOOT_DRIVE] - drive number
 ; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
 ; [BootSector.FIRST_DATA_CLUSTER] - LSN of cluster 2 (first cluster of data area)
+; Returns:
+; [BootSector.FILE_SIZE] - size of loaded file in bytes
 ; cf - set on error; clear otherwise
 readFile:
 .dirEntryLoop	mov di, fileName											; Compare filenames
@@ -273,6 +275,10 @@ readFile:
 
 ; Conver CN to LSN
 ; ax - CN-2
+; Returns:
+; ax - LSN
+; cx - sectors per cluster
+; Preserves: bx, bp
 cn2lsn:
 			mov cl, [sectorsPerCluster]									; Convert CN to LSN
 			xor ch, ch
@@ -284,6 +290,9 @@ cn2lsn:
 ; Convert LSN to CHS and load sector
 ; ax - LSN
 ; bx - Buffer offset
+; Returns:
+; cf - set on error; clear otherwise
+; Preserves: bx, di, bp
 loadSector:
 			xor dx, dx
 			add ax, [hiddenSectors]											; Convert LSN to LBA
@@ -313,7 +322,7 @@ loadSector:
 				pop dx
 				jnc short .return
 
-.retry			dec si														; Retry 3 times (due to unreliability of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
+.retry			dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
 				jz short .return
 				xor ah, ah													; Reset disk
 				int BIOS.DISK_INT
