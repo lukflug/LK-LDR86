@@ -79,7 +79,9 @@ bootloader:
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			pop dx
-			push ax
+			push ax															; Set [BootSector.SECTORS_PER_CYLINDER]
+			push word [hiddenSectors+0x0002]								; Set [BootSector.FIRST_DATA_CLUSTER]
+			push word [hiddenSectors]
 			call loadFile													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
 			mov [BootSector.BOOT_DRIVE], dl
@@ -120,33 +122,43 @@ loadFile:
 			mov byte [si], loadSector.lba-loadSector.chs					; Set to LBA if supported
 
 .chs		mov ax, [reservedSectors]										; Load FAT
-			mov bp, ax
+			add [BootSector.FIRST_DATA_CLUSTER], ax
+			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], 0x0000
 			mov bx, BootSector.FAT_BUFFER
-			call loadSector
+			call loadSectorZero
 			jc short .error
 
 %if FAT_TYPE != 32
-			mov ax, [sectorsPerFAT]											; Calculate LSN of first directory entry (= ax)
-			shl ax, 1
-			add ax, bp
-			mov bp, [rootEntries]											; Calculate LSN of first data cluster (= bp)
-			add bp, SECTOR_SIZE/FATEntry.SIZE-1
-			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
-			shr bp, cl
-			add bp, ax
-			mov [BootSector.FIRST_DATA_CLUSTER], bp							; Store first data cluster
+			mov ax, [sectorsPerFAT]											; Calculate first LBA after FATs
+			xor dx, dx
 %else
-			mov ax, [sectorsPerFAT32]										; Calculate LSN of first data cluster (= bp)
+			mov ax, [sectorsPerFAT32]
+			mov dx, [sectorsPerFAT32+0x0002]
+%endif
 			shl ax, 1
-			add bp, ax
-			mov [BootSector.FIRST_DATA_CLUSTER], bp							; Store first data cluster
-			mov ax, [rootCluster]											; Get first LSN of root directory (= ax)
+			rcl dx, 1
+			add [BootSector.FIRST_DATA_CLUSTER], ax
+			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+
+			mov bx, BootSector.DIR_BUFFER									; Load directory sector
+%if FAT_TYPE != 32
+			call loadSectorZero
+%else
+			mov ax, [rootCluster]											; Get first LBA of root directory
 			times 2 dec ax
 			call cn2lsn
+			call loadSector32
 %endif
-			mov bx, BootSector.DIR_BUFFER									; Load directory sector
-			call loadSector
 			jc short .error
+
+%if FAT_TYPE != 32
+			mov ax, [rootEntries]											; Calculate LBA of first data cluster (skip directory entry for FAT12/16)
+			add ax, SECTOR_SIZE/FATEntry.SIZE-1
+			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
+			shr ax, cl
+			add [BootSector.FIRST_DATA_CLUSTER], ax							; Store first data cluster
+			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+%endif
 
 			call readFile													; Find file and read into memory
 			jc short .error
@@ -273,30 +285,32 @@ readFile:
 			ret
 
 
-; Conver CN to LSN
+; Convert CN to LSN
 ; ax - CN-2
 ; Returns:
-; ax - LSN
+; dx:ax - LSN
 ; cx - sectors per cluster
 ; Preserves: bx, bp
 cn2lsn:
 			mov cl, [sectorsPerCluster]									; Convert CN to LSN
 			xor ch, ch
 			mul cx
-			add ax, [BootSector.FIRST_DATA_CLUSTER]
 			ret
 
 
-; Convert LSN to CHS and load sector
-; ax - LSN
+loadSectorZero:
+			xor ax, ax
+loadSector:
+			xor dx, dx
+; Load sector
+; dx:ax - LSN relative to [BootSector.FIRST_DATA_CLUSTER]
 ; bx - Buffer offset
 ; Returns:
 ; cf - set on error; clear otherwise
 ; Preserves: bx, di, bp
-loadSector:
-			xor dx, dx
-			add ax, [hiddenSectors]											; Convert LSN to LBA
-			adc dx, [hiddenSectors+0x0002]
+loadSector32:
+			add ax, [BootSector.FIRST_DATA_CLUSTER]							; Convert LSN to LBA
+			adc dx, [BootSector.FIRST_DATA_CLUSTER+0x0002]
 .patch		jmp short .chs
 
 .chs		div word [BootSector.SECTORS_PER_CYLINDER]						; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
