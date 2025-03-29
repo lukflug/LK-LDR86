@@ -14,7 +14,7 @@
 %include 'boot.inc'
 
 %ifndef FAT_TYPE
-%define FAT_TYPE 32
+%define FAT_TYPE 12
 %endif
 
 use16
@@ -83,9 +83,8 @@ bootloader:
 			pop dx
 			push ax															; Set [BootSector.SECTORS_PER_CYLINDER]
 
-			push dx															; Save BIOS drive number
-			call loadFile													; Try BIOS drive number first
-			pop dx
+			push dx															; Try BIOS drive number first
+			call loadFile
 			mov dl, [driveNumber]											; Try BPB drive number next
 			push dx
 			call loadFile
@@ -146,12 +145,11 @@ loadFile:
 %if FAT_TYPE != 32
 			call loadSectorZero
 %else
-			mov ax, [rootCluster]											; Get first LBA of root directory
-			;mov si, rootCluster
-			;lodsw
-			;mov dx, [si]													; Check if cluster number is not too high
-			;test dx, dx
-			;jnz short .error
+			mov si, rootCluster												; Get first LBA of root directory
+			lodsw
+			mov dx, [si]													; Check if cluster number is not too high
+			test dx, dx
+			jnz short .error
 			times 2 dec ax
 			call cn2lsn
 			call loadSector32
@@ -195,15 +193,13 @@ readFile:
 .return		ret
 
 .found:
+			mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
 %if FAT_TYPE == 32
-			cmp word [bx+FATEntry.FIRST_CLUSTER_HIGH], 0x0000				; Check if high word of first cluster number is zero (if FAT32)
-			jne short .error
+			mov dx, [bx+FATEntry.FIRST_CLUSTER_HIGH]
 %endif
-			lea si, [bx+FATEntry.FIRST_CLUSTER]
-			lodsw															; Get first cluster number
-			;cmp word [si+0x0002], 0x0000									; Check if file size is above 64k
-			;jne short .error
-			mov di, [si]													; Get file size
+			cmp word [bx+FATEntry.FILE_SIZE+0x0002], 0x0000					; Check if file size is above 64k
+			jne short .error
+			mov di, [bx+FATEntry.FILE_SIZE]									; Get file size
 			mov [BootSector.FILE_SIZE], di
 			mov bx, [BootSector.LOAD_OFFSET]								; Get load offset
 			add di, bx														; Save end of file in memory for later
@@ -211,7 +207,7 @@ readFile:
 			ja short .error
 
 .clusterLoop	push ax
-				times 2 dec ax												; Check EOF
+				sub ax, 0x0002												; Check EOF
 %if FAT_TYPE == 12
 				cmp ax, FAT12.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
 				jae short .eof
@@ -219,8 +215,14 @@ readFile:
 				cmp ax, FAT16.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
 				jae short .eof
 %elif FAT_TYPE == 32
+				sbb dx, 0x0000												; Check if upper word is zero
+				jz short .in_range
+				cmp dx, 0xFFFF												; If it's not zero, whether EOF or cluster that is out of reach
+				jb short .eof
 				cmp ax, (FAT32.MIN_EOC_CLUSTER&0xFFFF)-FAT.MIN_CLUSTER
-				jae short .eof
+.eof		pop ax															; Note jae = jnc and jb = jc
+			ret
+.in_range:
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
@@ -231,9 +233,21 @@ readFile:
 %else
 				call cn2lsn
 %endif
-				mov dx, ax
-				pop ax
 				mov bp, cx													; Save sectors per cluster
+
+.sectorLoop			cmp bx, di												; If read would be beyond file size (e.g. the cluster size is really large), assume EOF
+					jae short .eof
+					push ax
+					push dx
+					call loadSector32										; Load sector
+					pop dx
+					pop ax
+					jc short .eof
+					add bh, SECTOR_SIZE >> 8								; Increase buffer offset
+					inc ax													; Increase LSN
+					dec bp
+					jnz short .sectorLoop
+				pop ax
 
 %if FAT_TYPE == 12
 				cmp ax, (SECTOR_SIZE*2)/3									; Check if it is still inside first sector
@@ -261,35 +275,17 @@ readFile:
 				times 2 shl si, 1
 				add si, BootSector.FAT_BUFFER								; Load FAT entry
 				lodsw
-				mov cx, [si]
-				and cx, FAT32.CLUSTER_MASK >> 16							; Check if upper 12 bits are zero
-				jz short .in_range
-				cmp cx, FAT32.CLUSTER_MASK >> 16							; Check if EOF
-				jne short .error
-				cmp ax, FAT32.MIN_EOC_CLUSTER&0xFFFF
-				jb short .error
-.in_range:
+				mov dx, [si]
+				and dx, FAT32.CLUSTER_MASK >> 16
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
-
-				push ax
-				mov ax, dx													; Get LSN
-.sectorLoop			cmp bx, di												; If read would be beyond file size (e.g. the cluster size is really large), assume EOF
-					jae short .eof
-					push ax
-					call loadSector											; Load sector
-					pop ax
-					jc short .eof
-					add bh, SECTOR_SIZE >> 8								; Increase buffer offset
-					inc ax													; Increase LSN
-					dec bp
-					jnz short .sectorLoop
-				pop ax
 				jmp .clusterLoop
-
-.eof		pop ax															; jae = jnc, so carry is clear
+				
+%if FAT_TYPE != 32
+.eof		pop ax															; Note jae = jnc and jb = jc
 			ret
+%endif
 
 
 %if FAT_TYPE == 32
@@ -367,7 +363,7 @@ loadSector32:
 			push ax
 			push es															; Buffer address
 			push bx
-			inc si															; Transfer one word
+			inc si															; Transfer one block
 			push si
 			mov cx, BIOS.DISK_DAP_SIZE										; Size of packet
 			push cx
