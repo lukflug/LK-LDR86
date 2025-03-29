@@ -74,17 +74,20 @@ bootloader:
 			mov sp, BootSector.STACK_BASE
 			sti
 
-			mov [BootSector.BOOT_DRIVE], dl									; Save BIOS drive number
+			push word [hiddenSectors+0x0002]								; Set [BootSector.FIRST_DATA_CLUSTER]
+			push word [hiddenSectors]
+
 			push dx
 			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
 			mul word [headCount]
 			pop dx
 			push ax															; Set [BootSector.SECTORS_PER_CYLINDER]
-			push word [hiddenSectors+0x0002]								; Set [BootSector.FIRST_DATA_CLUSTER]
-			push word [hiddenSectors]
+
+			push dx															; Save BIOS drive number
 			call loadFile													; Try BIOS drive number first
+			pop dx
 			mov dl, [driveNumber]											; Try BPB drive number next
-			mov [BootSector.BOOT_DRIVE], dl
+			push dx
 			call loadFile
 
 			mov si, errorMessage											; Display error message
@@ -111,7 +114,7 @@ loadFile:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
-			mov si, loadSector.patch+0x0001									; Reset to CHS
+			mov si, loadSector32.patch+0x0001								; Reset to CHS
 			mov byte [si], 0x00
 			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
 			mov bx, BIOS.DISK_LBA_CHECK_IN
@@ -119,11 +122,10 @@ loadFile:
 			jc short .chs
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
-			mov byte [si], loadSector.lba-loadSector.chs					; Set to LBA if supported
+			mov byte [si], loadSector32.lba-loadSector32.chs				; Set to LBA if supported
 
 .chs		mov ax, [reservedSectors]										; Load FAT
-			add [BootSector.FIRST_DATA_CLUSTER], ax
-			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], 0x0000
+			call add16
 			mov bx, BootSector.FAT_BUFFER
 			call loadSectorZero
 			jc short .error
@@ -137,8 +139,7 @@ loadFile:
 %endif
 			shl ax, 1
 			rcl dx, 1
-			add [BootSector.FIRST_DATA_CLUSTER], ax
-			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+			call add32
 
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 %if FAT_TYPE != 32
@@ -156,8 +157,7 @@ loadFile:
 			add ax, SECTOR_SIZE/FATEntry.SIZE-1
 			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
 			shr ax, cl
-			add [BootSector.FIRST_DATA_CLUSTER], ax							; Store first data cluster
-			adc word [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+			call add16														; Store first data cluster
 %endif
 
 			call readFile													; Find file and read into memory
@@ -165,8 +165,8 @@ loadFile:
 
 			mov ax, BootSector.BOOT_SIGNATURE								; Scan for entry point
 			mov cx, [BootSector.FILE_SIZE]
+			sub di, cx
 			shr cx, 1
-			mov di, [BootSector.LOAD_OFFSET]
 .repeat			repne scasw
 				jcxz .error
 				scasw
@@ -182,6 +182,7 @@ loadFile:
 ; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
 ; [BootSector.FIRST_DATA_CLUSTER] - LSN of cluster 2 (first cluster of data area)
 ; Returns:
+; di - pointer to end of file
 ; [BootSector.FILE_SIZE] - size of loaded file in bytes
 ; cf - set on error; clear otherwise
 readFile:
@@ -204,10 +205,10 @@ readFile:
 %endif
 			lea si, [bx+FATEntry.FIRST_CLUSTER]
 			lodsw															; Get first cluster number
-			mov bp, [si]													; Get file size
-			mov [BootSector.FILE_SIZE], bp
+			mov di, [si]													; Get file size
+			mov [BootSector.FILE_SIZE], di
 			mov bx, [BootSector.LOAD_OFFSET]								; Get load offset
-			add bp, bx														; Save end of file in memory for later
+			add di, bx														; Save end of file in memory for later
 
 .clusterLoop	push ax
 				times 2 dec ax												; Check EOF
@@ -223,10 +224,16 @@ readFile:
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
+%if FAT_TYPE != 32
+				mov cl, [sectorsPerCluster]									; Convert CN to LSN
+				xor ch, ch
+				mul cx
+%else
 				call cn2lsn
+%endif
 				mov dx, ax
 				pop ax
-				mov di, cx													; Save sectors per cluster
+				mov bp, cx													; Save sectors per cluster
 
 %if FAT_TYPE == 12
 				cmp ax, (SECTOR_SIZE*2)/3									; Check if it is still inside first sector
@@ -268,7 +275,7 @@ readFile:
 
 				push ax
 				mov ax, dx													; Get LSN
-.sectorLoop			cmp bx, bp												; If read would be beyond file size (e.g. the cluster size is really large), assume EOF
+.sectorLoop			cmp bx, di												; If read would be beyond file size (e.g. the cluster size is really large), assume EOF
 					jae short .eof
 					push ax
 					call loadSector											; Load sector
@@ -276,7 +283,7 @@ readFile:
 					jc short .eof
 					add bh, SECTOR_SIZE >> 8								; Increase buffer offset
 					inc ax													; Increase LSN
-					dec di
+					dec bp
 					jnz short .sectorLoop
 				pop ax
 				jmp .clusterLoop
@@ -285,6 +292,7 @@ readFile:
 			ret
 
 
+%if FAT_TYPE == 32
 ; Convert CN to LSN
 ; ax - CN-2
 ; Returns:
@@ -295,6 +303,15 @@ cn2lsn:
 			mov cl, [sectorsPerCluster]									; Convert CN to LSN
 			xor ch, ch
 			mul cx
+			ret
+%endif
+
+
+add16:
+			xor dx, dx
+add32:
+			add [BootSector.FIRST_DATA_CLUSTER], ax
+			adc [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
 			ret
 
 
