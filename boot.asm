@@ -14,7 +14,7 @@
 %include 'boot.inc'
 
 %ifndef FAT_TYPE
-%define FAT_TYPE 12
+%define FAT_TYPE 32
 %endif
 
 use16
@@ -134,8 +134,9 @@ loadFile:
 			mov ax, [sectorsPerFAT]											; Calculate first LBA after FATs
 			xor dx, dx
 %else
-			mov ax, [sectorsPerFAT32]
-			mov dx, [sectorsPerFAT32+0x0002]
+			mov si, sectorsPerFAT32
+			lodsw
+			mov dx, [si]
 %endif
 			shl ax, 1
 			rcl dx, 1
@@ -146,6 +147,11 @@ loadFile:
 			call loadSectorZero
 %else
 			mov ax, [rootCluster]											; Get first LBA of root directory
+			;mov si, rootCluster
+			;lodsw
+			;mov dx, [si]													; Check if cluster number is not too high
+			;test dx, dx
+			;jnz short .error
 			times 2 dec ax
 			call cn2lsn
 			call loadSector32
@@ -162,16 +168,7 @@ loadFile:
 
 			call readFile													; Find file and read into memory
 			jc short .error
-
-			mov ax, BootSector.BOOT_SIGNATURE								; Scan for entry point
-			mov cx, [BootSector.FILE_SIZE]
-			sub di, cx
-			shr cx, 1
-.repeat			repne scasw
-				jcxz .error
-				scasw
-				jne short .repeat
-			jmp di															; Transfer control
+			jmp near [BootSector.LOAD_OFFSET]								; Transfer control
 
 .error		equ readFile.return
 
@@ -182,7 +179,6 @@ loadFile:
 ; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
 ; [BootSector.FIRST_DATA_CLUSTER] - LSN of cluster 2 (first cluster of data area)
 ; Returns:
-; di - pointer to end of file
 ; [BootSector.FILE_SIZE] - size of loaded file in bytes
 ; cf - set on error; clear otherwise
 readFile:
@@ -205,10 +201,14 @@ readFile:
 %endif
 			lea si, [bx+FATEntry.FIRST_CLUSTER]
 			lodsw															; Get first cluster number
+			;cmp word [si+0x0002], 0x0000									; Check if file size is above 64k
+			;jne short .error
 			mov di, [si]													; Get file size
 			mov [BootSector.FILE_SIZE], di
 			mov bx, [BootSector.LOAD_OFFSET]								; Get load offset
 			add di, bx														; Save end of file in memory for later
+			cmp di, BootSector.DIR_BUFFER-SECTOR_SIZE						; Make sure file would not overwrite sector
+			ja short .error
 
 .clusterLoop	push ax
 				times 2 dec ax												; Check EOF
@@ -300,7 +300,7 @@ readFile:
 ; cx - sectors per cluster
 ; Preserves: bx, bp
 cn2lsn:
-			mov cl, [sectorsPerCluster]									; Convert CN to LSN
+			mov cl, [sectorsPerCluster]										; Convert CN to LSN
 			xor ch, ch
 			mul cx
 			ret
