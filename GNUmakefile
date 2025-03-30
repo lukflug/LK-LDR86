@@ -1,18 +1,19 @@
 
-ASM_SRC = boot.asm lkldr86.asm
-DOCS = $(wildcard doc/*)
+ASM_SRC := boot.asm lkldr86.asm
+BUILD_DIRS := img bin dep
+ASM_BIN := $(ASM_SRC:%.asm=bin/%.bin)
+EXCLUDE_BIN := bin/boot.bin
+DEPFILES := $(ASM_SRC:%.asm=dep/%.d)
 
-BUILD_DIRS = img bin dep
-ASM_BIN = $(ASM_SRC:%.asm=bin/%.bin)
-EXCLUDE_BIN = bin/boot.bin
-DEPFILES = $(ASM_SRC:%.asm=dep/%.d)
-IMGFILES = img/160kB.img img/180kB.img img/320kB.img img/360kB.img \
+ASM := nasm
+ASMFLAGS := -w-label-redef-late
+override ASMFLAGS += -MD -MP -fbin
+
+IMGFILES := img/160kB.img img/180kB.img img/320kB.img img/360kB.img \
   img/720kB.img img/1200kB.img img/1440kB.img img/16384kB.img img/65536kB.img
+VOLUME_LABEL := LKLDR86
 
-ASM = nasm $< -o $@ -MT $@ -MD -MP -MF dep/$*.d -fbin -w-label-redef-late -Ilib
-VOLUME_LABEL = LKLDR86
-
-.PHONY: all testqemu clean
+.PHONY: all testqemu testbochs testbochs-hdd clean
 
 all: $(IMGFILES)
 
@@ -36,7 +37,7 @@ $(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
 	mattrib -i $@ +s lkldr86.bin lkldr.fs
 
 $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
-	$(ASM)
+	$(ASM) $< -o $@ -MF dep/$*.d $(ASMFLAGS)
 	touch $@
 
 $(DEPFILES):
