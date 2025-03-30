@@ -155,9 +155,9 @@ loadFile:
 
 %if FAT_TYPE != 32
 			mov ax, [rootEntries]											; Calculate LBA of first data cluster (skip directory entry for FAT12/16)
-			add ax, SECTOR_SIZE/FATEntry.SIZE-1
-			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
-			shr ax, cl
+			xor dx, dx
+			mov cx, SECTOR_SIZE/FATEntry.SIZE
+			div cx
 			call add16														; Store first data cluster
 %endif
 
@@ -200,20 +200,22 @@ readFile:
 			mov [BootSector.FILE_SIZE], di
 			mov bx, [BootSector.LOAD_OFFSET]								; Get load offset
 			add di, bx														; Save end of file in memory for later
+			jc short .error
 			cmp di, BootSector.DIR_BUFFER-SECTOR_SIZE						; Make sure file would not overwrite sector
 			ja short .error
 
 .clusterLoop	push ax
 .in_range:
 %if FAT_TYPE != 32
-				times 2 dec ax												; Check EOF
 %if FAT_TYPE == 12
-				cmp ax, FAT12.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
+				cmp ax, FAT12.MIN_EOC_CLUSTER								; Check EOF
 %elif FAT_TYPE == 16
-				cmp ax, FAT16.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
+				cmp ax, FAT16.MIN_EOC_CLUSTER
 %endif
 				jae short .eof
-				mov cl, [sectorsPerCluster]									; Convert CN to LSN
+				sub ax, FAT.MIN_CLUSTER										; Convert CN to LSN
+				jb short .error
+				mov cl, [sectorsPerCluster]
 				xor ch, ch
 				mul cx
 %else
@@ -226,7 +228,7 @@ readFile:
 					jae short .eof
 					push ax
 					push dx
-					call loadSector										; Load sector
+					call loadSector											; Load sector
 					pop dx
 					pop ax
 					jc short .eof
@@ -283,17 +285,17 @@ cn2lsn:
 			xor cx, cx
 			mov dx, [si]													; Fetch upper CN word
 			and dx, FAT32.CLUSTER_MASK >> 16
-			sub ax, 0x0002													; Decrease CN by two
-			sbb dx, 0x0000
-			jz short .in_range												; Check if upper word is zero
-			cmp dx, FAT32.CLUSTER_MASK >> 16								; If it's not zero, whether EOF or cluster that is out of reach
+			jnz short .overflow												; Check if upper word is zero
+			sub ax, FAT.MIN_CLUSTER											; Decrease CN by two
 			jb short .return
-			cmp ax, (FAT32.MIN_EOC_CLUSTER&0xFFFF)-FAT.MIN_CLUSTER
-.return		ret
-
-.in_range	mov cl, [sectorsPerCluster]										; Convert CN to LSN
+			mov cl, [sectorsPerCluster]										; Convert CN to LSN
 			mul cx
 			ret
+
+.overflow	cmp dx, FAT32.CLUSTER_MASK >> 16								; If it's not zero, check whether it's EOF or cluster that is out of reach
+			jb short .return
+			cmp ax, FAT32.MIN_EOC_CLUSTER&0xFFFF
+.return		ret
 %endif
 
 
@@ -372,7 +374,7 @@ loadSector:
 %if FAT_TYPE != 32
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A, 0x00
 %else
-errorMessage				db 'Error', 0x0D, 0x0A, 0x00
+errorMessage				db 'Err!', 0x0D, 0x0A, 0x00
 %endif
 
 							times (BootSector.LOAD_OFFSET-BootSector.BASE)-($-$$) db 0x00
