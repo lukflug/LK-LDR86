@@ -9,8 +9,6 @@ use16
 cpu 8086
 org 0x0600
 
-							dw BootSector.BOOT_SIGNATURE, BootSector.BOOT_SIGNATURE
-
 			mov word [BootSector.LOAD_OFFSET], message						; Load after end of file
 			mov si, file													; Copy file name	
 			mov di, BootSector.FILE_NAME

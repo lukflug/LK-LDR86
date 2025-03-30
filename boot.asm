@@ -6,9 +6,8 @@
 ; - exactly two FATs
 ; - directory entry of file located in first sector of root directory (i.e. first 32 entries)
 ; - FAT chain of file is fully contained within the first sector of the FAT
-; - everything must be within the first 65536 sectors of partition
+; - everything must be below 2 TiB on the disk (analogous to MBR limit)
 ; - files must be loaded below 0x7800
-; Scans to find signature 0xAA55AA55 preceding entry point.
 %include 'fat.inc'
 %include 'rombios.inc'
 %include 'boot.inc'
@@ -85,6 +84,7 @@ bootloader:
 
 			push dx															; Try BIOS drive number first
 			call loadFile
+			pop dx
 			mov dl, [driveNumber]											; Try BPB drive number next
 			push dx
 			call loadFile
@@ -113,7 +113,7 @@ loadFile:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
-			mov si, loadSector32.patch+0x0001								; Reset to CHS
+			mov si, loadSector.patch+0x0001									; Reset to CHS
 			mov byte [si], 0x00
 			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
 			mov bx, BIOS.DISK_LBA_CHECK_IN
@@ -121,7 +121,7 @@ loadFile:
 			jc short .chs
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
-			mov byte [si], loadSector32.lba-loadSector32.chs				; Set to LBA if supported
+			mov byte [si], loadSector.lba-loadSector.chs					; Set to LBA if supported
 
 .chs		mov ax, [reservedSectors]										; Load FAT
 			call add16
@@ -147,12 +147,9 @@ loadFile:
 %else
 			mov si, rootCluster												; Get first LBA of root directory
 			lodsw
-			mov dx, [si]													; Check if cluster number is not too high
-			test dx, dx
-			jnz short .error
-			times 2 dec ax
 			call cn2lsn
-			call loadSector32
+			jcxz .error
+			call loadSector
 %endif
 			jc short .error
 
@@ -195,7 +192,7 @@ readFile:
 .found:
 			mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
 %if FAT_TYPE == 32
-			mov dx, [bx+FATEntry.FIRST_CLUSTER_HIGH]
+			lea si, [bx+FATEntry.FIRST_CLUSTER_HIGH]
 %endif
 			cmp word [bx+FATEntry.FILE_SIZE+0x0002], 0x0000					; Check if file size is above 64k
 			jne short .error
@@ -207,31 +204,21 @@ readFile:
 			ja short .error
 
 .clusterLoop	push ax
-				sub ax, 0x0002												; Check EOF
+.in_range:
+%if FAT_TYPE != 32
+				times 2 dec ax												; Check EOF
 %if FAT_TYPE == 12
 				cmp ax, FAT12.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
-				jae short .eof
 %elif FAT_TYPE == 16
 				cmp ax, FAT16.MIN_EOC_CLUSTER-FAT.MIN_CLUSTER
-				jae short .eof
-%elif FAT_TYPE == 32
-				sbb dx, 0x0000												; Check if upper word is zero
-				jz short .in_range
-				cmp dx, 0xFFFF												; If it's not zero, whether EOF or cluster that is out of reach
-				jb short .eof
-				cmp ax, (FAT32.MIN_EOC_CLUSTER&0xFFFF)-FAT.MIN_CLUSTER
-.eof		pop ax															; Note jae = jnc and jb = jc
-			ret
-.in_range:
-%else
-%error "FAT_TYPE must be 12, 16, or 32!"
 %endif
-%if FAT_TYPE != 32
+				jae short .eof
 				mov cl, [sectorsPerCluster]									; Convert CN to LSN
 				xor ch, ch
 				mul cx
 %else
 				call cn2lsn
+				jcxz .eof
 %endif
 				mov bp, cx													; Save sectors per cluster
 
@@ -239,7 +226,7 @@ readFile:
 					jae short .eof
 					push ax
 					push dx
-					call loadSector32										; Load sector
+					call loadSector										; Load sector
 					pop dx
 					pop ax
 					jc short .eof
@@ -275,29 +262,36 @@ readFile:
 				times 2 shl si, 1
 				add si, BootSector.FAT_BUFFER								; Load FAT entry
 				lodsw
-				mov dx, [si]
-				and dx, FAT32.CLUSTER_MASK >> 16
 %else
 %error "FAT_TYPE must be 12, 16, or 32!"
 %endif
 				jmp .clusterLoop
-				
-%if FAT_TYPE != 32
+
 .eof		pop ax															; Note jae = jnc and jb = jc
 			ret
-%endif
 
 
 %if FAT_TYPE == 32
 ; Convert CN to LSN
-; ax - CN-2
+; [si]:ax - CN
 ; Returns:
 ; dx:ax - LSN
-; cx - sectors per cluster
-; Preserves: bx, bp
+; cx - sectors per cluster, or zero on fail
+; cf - set if overflow, clear if EOF
+; Preserves: bx, di, bp
 cn2lsn:
-			mov cl, [sectorsPerCluster]										; Convert CN to LSN
-			xor ch, ch
+			xor cx, cx
+			mov dx, [si]													; Fetch upper CN word
+			and dx, FAT32.CLUSTER_MASK >> 16
+			sub ax, 0x0002													; Decrease CN by two
+			sbb dx, 0x0000
+			jz short .in_range												; Check if upper word is zero
+			cmp dx, FAT32.CLUSTER_MASK >> 16								; If it's not zero, whether EOF or cluster that is out of reach
+			jb short .return
+			cmp ax, (FAT32.MIN_EOC_CLUSTER&0xFFFF)-FAT.MIN_CLUSTER
+.return		ret
+
+.in_range	mov cl, [sectorsPerCluster]										; Convert CN to LSN
 			mul cx
 			ret
 %endif
@@ -313,7 +307,6 @@ add32:
 
 loadSectorZero:
 			xor ax, ax
-loadSector:
 			xor dx, dx
 ; Load sector
 ; dx:ax - LSN relative to [BootSector.FIRST_DATA_CLUSTER]
@@ -321,7 +314,7 @@ loadSector:
 ; Returns:
 ; cf - set on error; clear otherwise
 ; Preserves: bx, di, bp
-loadSector32:
+loadSector:
 			add ax, [BootSector.FIRST_DATA_CLUSTER]							; Convert LSN to LBA
 			adc dx, [BootSector.FIRST_DATA_CLUSTER+0x0002]
 .patch		jmp short .chs
@@ -335,7 +328,7 @@ loadSector32:
 			mov ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
 			xor dx, dx
 			div word [sectorsPerTrack]
-			inc dl															; Store sector number
+			inc dx															; Store sector number
 			or cl, dl
 			mov dh, al														; Set head number
 			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
@@ -379,7 +372,7 @@ loadSector32:
 %if FAT_TYPE != 32
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A, 0x00
 %else
-errorMessage				db 'Error!', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error', 0x0D, 0x0A, 0x00
 %endif
 
 							times (BootSector.LOAD_OFFSET-BootSector.BASE)-($-$$) db 0x00

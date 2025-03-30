@@ -8,10 +8,8 @@
 ; The boot drive is passed to the boot sector via dl. The partition is
 ; identified based on the hidden sector field on the BPB. If loading fails for
 ; whatever reasons, the drive number in the EBPB field is tried before
-; displaying an error message. If the file is successfully loaded, the sequence
-; of bytes 0x55, 0xAA, 0x55, 0xAA (or 0xAA55AA55 in little endian) is scanned,
-; and the byte that follows is the entry point. Note the signature must be
-; word-aligned.
+; displaying an error message. If the file is successfully loaded, the boot
+; sector jumps to the first byte of the file.
 ;
 ; The memory is laid out as follows:
 ;         +-------------------------+
@@ -67,17 +65,23 @@
 ;         +-------------------------+
 ; The boot sector data is structured as follows (filled by the VBR code):
 ;         +-------------------------+
-; 0x07E00 |    LSN of cluster 2     | BootSector.FIRST_DATA_CLUSTER
+; 0x07E00 |   size of loaded file   | BootSector.FILE_SIZE
 ; 0x07E01 |                         |
-;         +-------------------------+
-; 0x07E02 |   int 13h boot drive    | BootSector.BOOT_DRIVE
 ;         +-------------------------+
 ;         |                         |
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         |       ^^ stack ^^       |
 ;         +-------------------------+
-; 0x07FFE |  sectors per cylinder   | BootSector.SECTORS_PER_CYLINDER
+; 0x07E08 |   int 13h boot drive    | BootSector.BOOT_DRIVE
+; 0x07E09 |                         |
+;         +-------------------------+
+; 0x07FFA |  sectors per cylinder   | BootSector.SECTORS_PER_CYLINDER
+; 0x07FFB |                         |
+;         +-------------------------+
+; 0x07FFC |    LSN of cluster 2     | BootSector.FIRST_DATA_CLUSTER
+; 0x07FFD |                         |
+; 0x07FFE |                         |
 ; 0x07FFF |                         |
 ;         +-------------------------+
 ;
