@@ -1,0 +1,4 @@
+* text=auto
+LICENSE text eol=crlf
+*.fs text eol=crlf
+*.sh text eol=lf
