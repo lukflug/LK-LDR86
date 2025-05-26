@@ -18,7 +18,7 @@ VOLUME_LABEL := LKLDR86
 all: $(IMGFILES)
 
 testqemu: img/1440kB.img
-	qemu-system-i386 -fda img/1440kB.img -soundhw pcspk
+	qemu-system-i386 -debugcon stdio -fda img/1440kB.img -soundhw pcspk
 
 testbochs: img/1440kB.img
 	-bochs
