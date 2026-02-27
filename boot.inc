@@ -73,8 +73,8 @@
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         |       ^^ stack ^^       |
 ;         +-------------------------+
-; 0x07E08 |   int 13h boot drive    | BootSector.BOOT_DRIVE
-; 0x07E09 |                         |
+; 0x07FF8 |   int 13h boot drive    | BootSector.BOOT_DRIVE
+; 0x07FF9 |                         |
 ;         +-------------------------+
 ; 0x07FFA |  sectors per cylinder   | BootSector.SECTORS_PER_CYLINDER
 ; 0x07FFB |                         |
