@@ -1,4 +1,7 @@
 
+VERSION := 0.0.0
+BUILD := 0000
+
 ASM_SRC := boot.asm lkldr86.asm
 BUILD_DIRS := img bin dep
 ASM_BIN := $(ASM_SRC:%.asm=bin/%.bin)
@@ -8,6 +11,9 @@ DEPFILES := $(ASM_SRC:%.asm=dep/%.d)
 ASM := nasm
 ASMFLAGS := -w-label-redef-late
 override ASMFLAGS += -MD -MP -fbin
+
+CC := cc
+CFLAGS := -ansi -Wall -Wextra -pedantic -O2 -pipe
 
 IMGFILES := img/160kB.img img/180kB.img img/320kB.img img/360kB.img \
   img/720kB.img img/1200kB.img img/1440kB.img img/16384kB.img img/65536kB.img
@@ -39,6 +45,9 @@ $(IMGFILES): img/%kB.img: $(ASM_BIN) lkldr.fs | img
 $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
 	$(ASM) $< -o $@ -MF dep/$*.d $(ASMFLAGS)
 	touch $@
+
+bin/lkldr: lkldr.c
+	$(CC) $(CFLAGS) -DVERSION=\"$(VERSION)\" -DBUILD=\"$(BUILD)\" $< -o $@
 
 $(DEPFILES):
 
