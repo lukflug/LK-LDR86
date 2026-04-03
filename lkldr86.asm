@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
-; Second stage
+; Second Stage
 %include 'fat.inc'
 %include 'rombios.inc'
 %include 'boot.inc'

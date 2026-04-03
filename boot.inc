@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
-; Boot sector interface header
+; Boot Sector Interface Header
 ; The volume boot record expects to be loaded in real mode at linear address
 ; 0x07C00 into a PC-compatible BIOS environment. It loads a fragmented file on a
 ; FAT partition (the boot sector comes in three variants for FAT12, FAT16, and

@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: MIT
 ; LK-LDR/86
-; Boot sector for volume boot record
+; Boot Sector for Volume Boot Record
 ; Loads a fragmented file on a FAT12, FAT16, or FAT32 partition. Assumes:
 ; - logical sector size = int 13h sector size
 ; - exactly two FATs
