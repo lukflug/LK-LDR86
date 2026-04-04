@@ -1,4 +1,4 @@
-/*
+*
  * SPDX-License-Identifier: MIT
  * LK-LDR/86
  * Installation Utility
