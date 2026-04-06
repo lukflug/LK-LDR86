@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <limits.h>
 
 #define COPYRIGHT "Copyright (c) 2026 lukflug. Licensed under MIT."
 #ifndef VERSION
@@ -18,6 +19,55 @@
 #ifndef BUILD
 #define BUILD "NONE"
 #endif
+
+#define SECTOR_SIZE 512
+
+#define BPB_OEM_NAME 0x0003
+#define BPB_SECTOR_SIZE 0x000B
+#define BPB_CLUSTER_SIZE 0x000D
+#define BPB_RESERVED_SECTORS 0x000E
+#define BPB_FAT_COUNT 0x0010
+#define BPB_ROOT_ENTRIES 0x0011
+#define BPB_SECTOR_COUNT 0x0013
+#define BPB_MEDIA_DESCRIPTOR 0x0015
+#define BPB_FAT_SIZE 0x0016
+#define BPB_SECTORS_PER_TRACK 0x0018
+#define BPB_HEAD_COUNT 0x001A
+#define BPB_HIDDEN_SECTORS 0x001C
+#define BPB_SECTOR_COUNT_32 0x0020
+
+#define EBPB_DRIVE_NUMBER 0x0024
+#define EBPB_RESERVED_BYTE 0x0025
+#define EBPB_SIGNATURE 0x0026
+#define EBPB_SERIAL_NUMBER 0x0027
+#define EBPB_VOLUME_LABEL 0x002B
+#define EBPB_FILE_SYSTEM 0x0036
+#define EBPB_END 0x003E
+
+#define EBPB32_FAT_SIZE_32 0x0024
+#define EBPB32_FLAGS 0x0028
+#define EBPB32_VERSION 0x002A
+#define EBPB32_ROOT_DIR_CLUSTER 0x002C
+#define EBPB32_FS_INFO_LSN 0x0030
+#define EBPB32_RESERVED 0x0034
+#define EBPB32_DRIVE_NUMBER 0x0040
+#define EBPB32_RESERVED_BYTE 0x0041
+#define EBPB32_SIGNATURE 0x0042
+#define EBPB32_SERIAL_NUMBER 0x0043
+#define EBPB32_VOLUME_LABEL 0x0047
+#define EBPB32_FILE_SYSTEM 0x0052
+#define EBPB32_END 0x005A
+
+#define BOOT_LOAD_OFFSET (0x0200-0x0012)
+#define BOOT_FILE_NAME (0x0200-0x0010)
+
+
+static void print_error(int error) {
+	if (error) {
+		char *msg = strerror(error);
+		fprintf(stderr,": %s\n",msg);
+	} else fprintf(stderr,"!\n");
+}
 
 
 enum option_type {
@@ -126,7 +176,7 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 }
 
 
-static int parse_fat_filename (char *dest, char *filename) {
+static int parse_fat_filename(char *dest, char *filename) {
 	static const int table[] = {
 		1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0,
 		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
@@ -141,7 +191,7 @@ static int parse_fat_filename (char *dest, char *filename) {
 	for (i = 0; i < 11; i++) {
 		unsigned char c = *filename++;
 		/* check for end of filename */
-		if (c == '\0') {
+		if (!c) {
 			while (i < 11) dest[i++] = ' ';
 			return 0;
 		}
@@ -149,7 +199,7 @@ static int parse_fat_filename (char *dest, char *filename) {
 		/* if dot, we've reached file extension */
 		if (c == '.' && i <= 8) {
 			/* first character cannot be space */
-			if (i == 0) return 1;
+			if (!i) return 1;
 			/* pad with space */
 			while (i < 8) dest[i++] = ' ';
 			file_extension = 1;
@@ -159,11 +209,11 @@ static int parse_fat_filename (char *dest, char *filename) {
 		if (i >= 8 && !file_extension) return 1;
 
 		/* normalize character */
-		if (c >= 'a' && c <= 'z') c -= 0x20;
+		if (c >= 'a' && c <= 'z') c -= 'a'-'A';
 		/* validate character */
-		if (c < ' ' || (i == 0 && c == ' ') || (c <= 0x7F && !table[c-' '])) return 1;
+		if (c < ' ' || (!i && c == ' ') || (c <= 0x7F && !table[c-' '])) return 1;
 		/* do 0xE5 replacement */
-		if (i == 0 && c == 0xE5) c = 0x05;
+		if (!i && c == 0xE5) c = 0x05;
 		/* store character */
 		dest[i] = c;
 	}
@@ -173,12 +223,229 @@ static int parse_fat_filename (char *dest, char *filename) {
 }
 
 
+enum bpb_type {
+	RAW, FAT12, FAT16, FAT32
+};
+
+static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long partition_offset, char *binary_path, enum bpb_type type,
+                     int write_oem_name, char *oem_name, long load_offset, char *second_stage) {
+	int error = 0;
+	FILE *device, *binary;
+	static unsigned char device_buf[SECTOR_SIZE], binary_buf[SECTOR_SIZE]; /* 1 kiB of stack space might be an imposition on some systems */
+	int i;
+
+	if (verbose) printf("Writing to device '%s' at LBA %lu\n",device_path,partition_offset);
+
+	errno = 0;
+	if ((device = fopen(device_path,"r+b")) == NULL) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Could not open '%s'",argv0,device_path);
+		print_error(err);
+		return 1;
+	}
+	setbuf(device,NULL);
+
+	if (partition_offset >= LONG_MAX/SECTOR_SIZE) {
+		fprintf(stderr,"%s: vbrinstall: Integer overflow from partition offset!",argv0);
+		error = 1;
+		goto abort;
+	}
+	errno = 0;
+	if (fseek(device,partition_offset*SECTOR_SIZE,SEEK_SET)) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Failed to seek on '%s'",argv0,device_path);
+		print_error(err);
+		error = 1;
+		goto abort;
+	}
+
+	errno = 0;
+	if (fread(device_buf,sizeof(char),SECTOR_SIZE,device) < SECTOR_SIZE) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Failed to read from '%s'",argv0,device_path);
+		print_error(err);
+		error = 1;
+		goto abort;
+	}
+
+	if (binary_path == NULL) {
+		unsigned char cluster_size = device_buf[BPB_CLUSTER_SIZE];
+		unsigned int reserved_sectors = ((unsigned int)device_buf[BPB_RESERVED_SECTORS+1] << 8) + device_buf[BPB_RESERVED_SECTORS];
+		unsigned int root_entries = ((unsigned int)device_buf[BPB_ROOT_ENTRIES+1] << 8) + device_buf[BPB_ROOT_ENTRIES];
+		unsigned long total_sectors = ((unsigned int)device_buf[BPB_SECTOR_COUNT+1] << 8) + device_buf[BPB_SECTOR_COUNT];
+		unsigned int fat_size_16 = ((unsigned int)device_buf[BPB_FAT_SIZE+1] << 8) + device_buf[BPB_FAT_SIZE];
+		unsigned long fat_size = fat_size_16;
+		unsigned long first_data_sector, cluster_count = 0;
+
+		if (!total_sectors) total_sectors = ((unsigned long)device_buf[BPB_SECTOR_COUNT_32+3] << 24)
+		                                  + ((unsigned long)device_buf[BPB_SECTOR_COUNT_32+2] << 16)
+		                                  + ((unsigned long)device_buf[BPB_SECTOR_COUNT_32+1] << 8)
+		                                  + device_buf[BPB_SECTOR_COUNT_32];
+		if (!fat_size) fat_size = ((unsigned long)device_buf[EBPB32_FAT_SIZE_32+3] << 24)
+		                        + ((unsigned long)device_buf[EBPB32_FAT_SIZE_32+2] << 16)
+		                        + ((unsigned long)device_buf[EBPB32_FAT_SIZE_32+1] << 8)
+		                        + device_buf[EBPB32_FAT_SIZE_32];
+
+		/* sanity check BPB */
+		/* logical sector size must be 512 */
+		if (device_buf[BPB_SECTOR_SIZE] != (SECTOR_SIZE&0xFF) || device_buf[BPB_SECTOR_SIZE+1] != SECTOR_SIZE >> 8) error = 1;
+		/* reserved sector count must be non-zero */
+		if (!reserved_sectors) error = 1;
+		/* FAT count must be two */
+		if (device_buf[BPB_FAT_COUNT] != 2) error = 1;
+		/* amount of root entries must be divisible by 32 */
+		if (root_entries % (SECTOR_SIZE/32)) error = 1;
+		/* total sector count must be non-zero */
+		if (!total_sectors) error = 1;
+		/* FAT size must be non-zero and not cause numerical overflow */
+		if (!fat_size || fat_size > ULONG_MAX/2) error = 1;
+
+		/* determine cluster count */
+		first_data_sector = (unsigned long)reserved_sectors + root_entries/(SECTOR_SIZE/32);
+		first_data_sector += fat_size*2;
+		/* check for integer overflow */
+		if (first_data_sector < fat_size*2) error = 1;
+		/* ensure there's more total sectors than first data sector */
+		if (total_sectors <= first_data_sector) error = 1;
+		/* sectors per cluster must be non-zero */
+		if (cluster_size) cluster_count = (total_sectors - first_data_sector) / cluster_size;
+		/* cluster count must be positive */
+		if (!cluster_count) error = 1;
+
+		/* determine FAT type */
+		type = FAT32;
+		if (cluster_count < 4085) type = FAT12;
+		else if (cluster_count < 65525) type = FAT16;
+		/* sanity check stuff */
+		if (type == FAT32) {
+			/* root entries and 16-bit FAT size field must be zero */
+			if (root_entries) error = 1;
+			if (fat_size_16) error = 1;
+			/* check EBPB signature */
+			if (device_buf[EBPB32_SIGNATURE] != 0x28 && device_buf[EBPB32_SIGNATURE] != 0x29) error = 1;
+			/* check version number */
+			if (device_buf[EBPB32_VERSION] || device_buf[EBPB32_VERSION+1]) error = 1;
+		} else {
+			/* root entries and 16-bit FAT size field must be non-zero */
+			if (!root_entries) error = 1;
+			if (!fat_size_16) error = 1;
+			/* check EBPB signature */
+			if (device_buf[EBPB_SIGNATURE] != 0x28 && device_buf[EBPB_SIGNATURE] != 0x29) error = 1;
+		}
+
+		if (error) {
+			fprintf(stderr,"%s: vbrinstall: Partition must be valid FAT volume for FAT type detection!\n",argv0);
+			goto abort;
+		}
+
+		if (type == FAT12) {
+			binary_path = "bin/boot12.bin";
+			if (verbose) printf("FAT type detected: FAT12, using boot12.bin\n");
+		} else if (type == FAT16) {
+			binary_path = "bin/boot16.bin";
+			if (verbose) printf("FAT type detected: FAT16, using boot16.bin\n");
+		} else if (type == FAT32) {
+			binary_path = "bin/boot32.bin";
+			if (verbose) printf("FAT type detected: FAT32, using boot32.bin\n");
+		}
+	}
+
+	if (verbose) printf("Reading from bootsector binary '%s'\n",binary_path);
+
+	errno = 0;
+	if ((binary = fopen(binary_path,"rb")) == NULL) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Could not open '%s'",argv0,binary_path);
+		print_error(err);
+		error = 1;
+		goto abort;
+	}
+
+	errno = 0;
+	if (fread(binary_buf,sizeof(char),SECTOR_SIZE,binary) < SECTOR_SIZE) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Failed to read from '%s'",argv0,binary_path);
+		print_error(err);
+		error = 1;
+		goto end;
+	}
+
+	/* copy first three bytes */
+	for (i = 0; i < BPB_OEM_NAME; i++) device_buf[i] = binary_buf[i];
+	/* copy the stuff after the BPB */
+	switch (type) {
+	case RAW:
+		i = BPB_OEM_NAME + 8;
+		if (verbose) printf("Assuming no BPB\n");
+		break;
+	case FAT12:
+	case FAT16:
+		i = EBPB_END;
+		if (verbose) printf("Assuming FAT12/16 (E)BPB\n");
+		break;
+	case FAT32:
+		i = EBPB32_END;
+		if (verbose) printf("Assuming FAT32 (E)BPB\n");
+		break;
+	}
+	for (; i < SECTOR_SIZE; i++) device_buf[i] = binary_buf[i];
+
+	/* copy OEM name, if desired */
+	if (write_oem_name) {
+		unsigned char *p = binary_buf + BPB_OEM_NAME;
+		/* if custom OEM name was specified use that instead of the bootsector OEM name */
+		if (oem_name[0]) {
+			p = (unsigned char *)oem_name;
+			if (verbose) printf("Setting OEM name to '%s'\n",oem_name);
+		}
+		for (i = 0; i < 8; i++) device_buf[BPB_OEM_NAME + i] = p[i];
+	} else if (verbose) printf("Not overwriting OEM name\n");
+	/* write custom load offset, if necessary */
+	if (load_offset >= 0) {
+		if (verbose) printf("Setting load offset to 0x%x\n",(unsigned int)load_offset);
+		device_buf[BOOT_LOAD_OFFSET] = load_offset & 0xFF;
+		device_buf[BOOT_LOAD_OFFSET+1] = load_offset >> 8;
+	}
+	/* write custom second stage file name */
+	if (second_stage[0]) {
+		for (i = 0; i < 11; i++) device_buf[BOOT_FILE_NAME+i] = second_stage[i];
+		printf("Setting second stage filename to '%s'\n",second_stage);
+	}
+
+	errno = 0;
+	if (fseek(device,partition_offset*SECTOR_SIZE,SEEK_SET)) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Failed to seek on '%s'",argv0,device_path);
+		print_error(err);
+		error = 1;
+		goto end;
+	}
+
+	errno = 0;
+	if (fwrite(device_buf,sizeof(char),SECTOR_SIZE,device) < SECTOR_SIZE) {
+		int err = errno;
+		fprintf(stderr,"'%s: vbrinstall: Failed to write to '%s'",argv0,device_path);
+		print_error(err);
+		error = 1;
+		goto end;
+	}
+
+end:
+	fclose(binary);
+abort:
+	fclose(device);
+	return error;
+}
+
+
 static void vbrinstall_usage(char *argv0) {
 	printf(
-		"Usage: %s vbrinstall [<options>] [--] <device> [bootsector]\n"
+		"Usage: %s vbrinstall [<options>] [--] <device> [<bootsector> <bpb>]\n"
 		"\n"
 		"Write <bootsector> to volume boot record of <device>.\n"
-		"If <bootsector> is not specified, the script will automatically detect whether\n"
+		"<bpb> must be none, fat12, fat16, and fat32 and determines what bytes of the\n"
+		"BIOS parameter block (BPB) should not be overwritten.\n"
+		"If <bootsector> is not specified, the utility will automatically detect whether\n"
 		"it is a FAT12, FAT16, or FAT32 partition and install the corresponding boot\n"
 		"sector image (boot12.bin, boot16.bin, or boot32.bin).\n"
 		"\n", argv0);
@@ -187,9 +454,9 @@ static void vbrinstall_usage(char *argv0) {
 		"  -h, --help                        display this help message\n"
 		"      --load-offset=<offset>        specify custom load offset (default:\n"
 		"                                    0x0600)\n"
-		"      --oem-name=[<name>]           specify custom OEM name, or preserve\n"
+		"      --oem-name[=<name>]           specify custom OEM name, or don't overwrite\n"
 		"                                    previous OEM name if no argument is passed\n"
-		"                                    (default: use bootsector OEM name)\n"
+		"                                    (default: LKLDR86)\n"
 		"      --partition-offset=<LBA>      specify partition start LBA (default: 0)\n");
 	printf(
 		"      --second-stage=<filename>     specify custom second stage binary\n"
@@ -207,19 +474,19 @@ static void vbrinstall_usage(char *argv0) {
 static int vbrinstall(int argc, char **argv) {
 	int error = 0;
 	/* parse options */
-	int *posarg = calloc(argc-2,sizeof(int));
 	enum option_type shortopt_type[2] = {NONE,NONE};
 	char *shortopt_arg[2] = {NULL,NULL};
 	char *longopt[6] = {"help","load-offset","oem-name","partition-offset","second-stage","verbose"};
 	enum option_type longopt_type[6] = {NONE,MANDATORY,OPTIONAL,MANDATORY,MANDATORY,NONE};
 	char *longopt_arg[6] = {NULL,NULL,NULL,NULL,NULL,NULL};
+	int *posarg = calloc(argc-2,sizeof(int));
 	int posarg_count;
 
-	if (!posarg) {
+	if (posarg == NULL) {
 		fprintf(stderr,"%s: panic: Memory allocation failed!\n",argv[0]);
 		return EXIT_FAILURE;
 	}
-	posarg_count = parse_options(argc,argv,"hv",shortopt_type,shortopt_arg,5,longopt,longopt_type,longopt_arg,posarg);
+	posarg_count = parse_options(argc,argv,"hv",shortopt_type,shortopt_arg,6,longopt,longopt_type,longopt_arg,posarg);
 
 	if (posarg_count >= 0) {
 		/* interpret results */
@@ -228,15 +495,18 @@ static int vbrinstall(int argc, char **argv) {
 		else if (posarg_count < 1) {
 			fprintf(stderr,"%s: vbrinstall: Device path expected!\n",argv[0]);
 			error = 1;
-		} else if (posarg_count > 2) {
-			fprintf(stderr,"%s: vbrinstall: Too many arguments! Expected 2, but %i provided.\n",argv[0],posarg_count);
+		} else if (posarg_count == 2) {
+			fprintf(stderr,"%s: vbrinstall: BPB type expected!\n",argv[0]);
+		} else if (posarg_count > 3) {
+			fprintf(stderr,"%s: vbrinstall: Too many arguments! Expected 3, but %i provided.\n",argv[0],posarg_count);
 			error = 1;
 		} else {
-			long load_offset = 0x0600;
+			long load_offset = -1;
 			unsigned long partition_offset = 0;
 			/* use OEM name from boot sector binary by default */
 			int write_oem_name = 1;
-			char oem_name[8] = "", second_stage[] = "LKLDR86 BIN";
+			char oem_name[9] = "", second_stage[12] = "";
+			oem_name[8] = second_stage[11] = '\0';
 
 			if (longopt_arg[1] != NULL) {
 				/* parse load offset argument */
@@ -271,7 +541,7 @@ static int vbrinstall(int argc, char **argv) {
 				/* parse partition offset argument */
 				char *end;
 				partition_offset = strtoul(longopt_arg[3],&end,0);
-				if (end != longopt_arg[1]+strlen(longopt_arg[3])) {
+				if (end != longopt_arg[3]+strlen(longopt_arg[3]) || partition_offset > 0xFFFFFFFF) {
 					fprintf(stderr,"%s: vbrinstall: Partition offset must be 32-bit unsigned integer!\n",argv[0]);
 					error = 1;
 				}
@@ -286,23 +556,27 @@ static int vbrinstall(int argc, char **argv) {
 			}
 
 			if (!error) {
-				FILE *device;
-				errno = 0;
-				device = fopen(argv[posarg[0]],"r+b");
-				if (!device) {
-					if (errno) {
-						char *msg = strerror(errno);
-						fprintf(stderr,"%s: vbrinstall: Could not open '%s': %s\n",argv[0],argv[posarg[0]],msg);
-					} else fprintf(stderr,"%s: vbrinstall: Could not open '%s'!\n",argv[0],argv[posarg[0]]);
-					goto abort;
+				enum bpb_type type = RAW;
+				if (posarg_count == 3) {
+					if (!strcmp(argv[posarg[2]],"none")) type = RAW;
+					else if (!strcmp(argv[posarg[2]],"fat12")) type = FAT12;
+					else if (!strcmp(argv[posarg[2]],"fat16")) type = FAT16;
+					else if (!strcmp(argv[posarg[2]],"fat32")) type = FAT32;
+					else {
+						fprintf(stderr,"%s: vbrinstall: BPB type must be none, FAT12, FAT16, or FAT32.\n",argv[0]);
+						error = 1;
+						goto end;
+					}
 				}
-				setbuf(device,NULL);
+				error = write_vbr(argv[0], verbose, argv[posarg[0]], partition_offset, posarg_count == 3 ? argv[posarg[1]] : NULL, type,
+				                  write_oem_name, oem_name, load_offset, second_stage);
+				goto end;
 			}
 		}
 	}
 
 	if (error) fprintf(stderr,"For more information, try '%s vbrinstall --help'.\n",argv[0]);
-abort:
+end:
 	free(posarg);
 	return error ? EXIT_FAILURE : EXIT_SUCCESS;
 }

@@ -51,7 +51,15 @@ reservedByte				db 0x00
 bootSignature				db EBPB.EBPB_SIGNATURE_B
 serialNumber				dd 0x00000000
 volumeLabel					db 'LKLDR86    '
+%if FAT_TYPE == 12
 fileSystem					db 'FAT12   '
+%elif FAT_TYPE == 16
+fileSystem					db 'FAT16   '
+%elif FAT_TYPE == 32
+fileSystem					db 'FAT32   '
+%else
+fileSystem					db 'FAT     '
+%endif
 
 
 ; Set up segment registers and stack and calculate sectors per cylinder
