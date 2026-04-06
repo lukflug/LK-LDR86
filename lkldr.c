@@ -61,12 +61,58 @@
 #define BOOT_LOAD_OFFSET (0x0200-0x0012)
 #define BOOT_FILE_NAME (0x0200-0x0010)
 
+static char *argv0, *argv1;
 
-static void print_error(int error) {
+
+static void print_error(const char *diagnostic, const char *filename, int error) {
 	if (error) {
-		char *msg = strerror(error);
-		fprintf(stderr,": %s\n",msg);
-	} else fprintf(stderr,"!\n");
+		const char *msg = strerror(error);
+		fprintf(stderr,"%s: %s: %s '%s': %s\n",argv0,argv1,diagnostic,filename,msg);
+	} else fprintf(stderr,"%s: %s: %s '%s'!\n",argv0,argv1,diagnostic,filename);
+}
+
+
+static int checked_fopen(FILE **file, const char *filename, const char *mode) {
+	errno = 0;
+	if ((*file = fopen(filename,mode)) == NULL) {
+		int error = errno;
+		print_error("Could not open",filename,error);
+		return 1;
+	}
+	return 0;
+}
+
+
+static int checked_fseek(FILE **file, const char *filename, long int offset, int whence) {
+	errno = 0;
+	if (fseek(*file,offset,whence)) {
+		int error = errno;
+		print_error("Failed to seek on",filename,error);
+		return 1;
+	}
+	return 0;
+}
+
+
+static int checked_fread(FILE **file, const char *filename, void *buf, size_t size, size_t nmemb) {
+	errno = 0;
+	if (fread(buf,size,nmemb,*file) < nmemb) {
+		int error = errno;
+		print_error("Failed to read from",filename,error);
+		return 1;
+	}
+	return 0;
+}
+
+
+static int checked_fwrite(FILE **file, const char *filename, void *buf, size_t size, size_t nmemb) {
+	errno = 0;
+	if (fwrite(buf,size,nmemb,*file) < nmemb) {
+		int error = errno;
+		print_error("Failed to write to",filename,error);
+		return 1;
+	}
+	return 0;
 }
 
 
@@ -86,8 +132,8 @@ enum option_type {
  * posarg - pointer to array of length argc-2, which will get filled with the argv indices of positional arguments
  * Return value is the amount of positional arguments
  */
-static int parse_options(int argc, char **argv, char *shortopt, enum option_type *shortopt_type, char **shortopt_arg,
-                         int longopt_count, char **longopt, enum option_type *longopt_type, char **longopt_arg, int *posarg) {
+static int parse_options(int argc, char **argv, const char *shortopt, const enum option_type *shortopt_type, const char **shortopt_arg,
+                         int longopt_count, const char **longopt, const enum option_type *longopt_type, const char **longopt_arg, int *posarg) {
 	int posarg_count = 0;
 	int shortopt_count = strlen(shortopt);
 	int i;
@@ -98,22 +144,8 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 			/* positional argument */
 			posarg[posarg_count] = i;
 			posarg_count++;
-		} else if (argv[i][1] != '-' && !argv[i][2]) {
-			/* single short option */
-			int opt = strcspn(shortopt,argv[i]+1);
-			if (opt < shortopt_count) {
-				if (shortopt_type[opt] != NONE && i+1 < argc && (argv[i+1][0] != '-' || !argv[i+1][1])) shortopt_arg[opt] = argv[++i];
-				else if (shortopt_type[opt] != MANDATORY) shortopt_arg[opt] = "";
-				else {
-					fprintf(stderr,"%s: Option '%s' expects argument!\n",argv[0],argv[i]);
-					error = 1;
-				}
-			} else {
-				fprintf(stderr,"%s: Unrecognized option '%s'!\n",argv[0],argv[i]);
-				error = 1;
-			}
-		} else if (argv[i][1] != '-' && argv[i][2]) {
-			/* multiple short options */
+		} else if (argv[i][1] != '-') {
+			/* short option */
 			char *p;
 			for (p = argv[i]+1; *p; p++) {
                 /* scan for option */
@@ -123,13 +155,14 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 				opt = strcspn(shortopt,s);
 
 				if (opt < shortopt_count) {
-					if (shortopt_type[opt] != MANDATORY) shortopt_arg[opt] = "";
+					if (!argv[i][2] && shortopt_type[opt] != NONE && i+1 < argc && (argv[i+1][0] != '-' || !argv[i+1][1])) shortopt_arg[opt] = argv[++i];
+					else if (shortopt_type[opt] != MANDATORY) shortopt_arg[opt] = "";
 					else {
-						fprintf(stderr,"%s: Option '-%c' expects argument!\n",argv[0],*p);
+						fprintf(stderr,"%s: %s: Option '-%c' expects argument!\n",argv[0],argv[1],*p);
 						error = 1;
 					}
 				} else {
-					fprintf(stderr,"%s: Unrecognized option '-%c'!\n",argv[0],*p);
+					fprintf(stderr,"%s: %s: Unrecognized option '-%c'!\n",argv[0],argv[1],*p);
 					error = 1;
 				}
 			}
@@ -153,7 +186,7 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 			if (j < longopt_count) {
 				/* deal with argument */
 				if (equals_sign && longopt_type[j] == NONE) {
-					fprintf(stderr,"%s: Option '%s' does not expect argument!\n",argv[0],argv[i]);
+					fprintf(stderr,"%s: %s: Option '%s' does not expect argument!\n",argv[0],argv[1],argv[i]);
 					error = 1;
 				} else if (equals_sign && longopt_type[j] != NONE) {
 					argv[i] += arg+1;
@@ -161,11 +194,11 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 				} else if (longopt_type[j] != NONE && i+1 < argc && (argv[i+1][0] != '-' || !argv[i+1][1])) longopt_arg[j] = argv[++i];
 				else if (longopt_type[j] != MANDATORY) longopt_arg[j] = "";
 				else {
-					fprintf(stderr,"%s: Option '%s' expects argument!\n",argv[0],argv[i]);
+					fprintf(stderr,"%s: %s: Option '%s' expects argument!\n",argv[0],argv[1],argv[i]);
 					error = 1;
 				}
 			} else {
-				fprintf(stderr,"%s: Unrecognized option '%s'!\n",argv[0],argv[i]);
+				fprintf(stderr,"%s: %s: Unrecognized option '%s'!\n",argv[0],argv[1],argv[i]);
 				error = 1;
 			}
 		}
@@ -176,7 +209,7 @@ static int parse_options(int argc, char **argv, char *shortopt, enum option_type
 }
 
 
-static int parse_fat_filename(char *dest, char *filename) {
+static int parse_fat_filename(char *dest, const char *filename) {
 	static const int table[] = {
 		1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 1, 0, 0,
 		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
@@ -227,43 +260,27 @@ enum bpb_type {
 	RAW, FAT12, FAT16, FAT32
 };
 
-static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long partition_offset, char *binary_path, enum bpb_type type,
-                     int write_oem_name, char *oem_name, long load_offset, char *second_stage) {
+static int write_vbr(int verbose, const char *device_path, unsigned long partition_offset, const char *binary_path, enum bpb_type type,
+                     int write_oem_name, const char *oem_name, long load_offset, const char *second_stage) {
 	int error = 0;
 	FILE *device, *binary;
 	static unsigned char device_buf[SECTOR_SIZE], binary_buf[SECTOR_SIZE]; /* 1 kiB of stack space might be an imposition on some systems */
 	int i;
 
 	if (verbose) printf("Writing to device '%s' at LBA %lu\n",device_path,partition_offset);
-
-	errno = 0;
-	if ((device = fopen(device_path,"r+b")) == NULL) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Could not open '%s'",argv0,device_path);
-		print_error(err);
-		return 1;
-	}
+	/* open device */
+	if (checked_fopen(&device,device_path,"r+b")) return 1;
+	/* ensure we're not buffering */
 	setbuf(device,NULL);
-
+	/* make sure seek offset doesn't overflow */
 	if (partition_offset >= LONG_MAX/SECTOR_SIZE) {
 		fprintf(stderr,"%s: vbrinstall: Integer overflow from partition offset!",argv0);
 		error = 1;
 		goto abort;
 	}
-	errno = 0;
-	if (fseek(device,partition_offset*SECTOR_SIZE,SEEK_SET)) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Failed to seek on '%s'",argv0,device_path);
-		print_error(err);
-		error = 1;
-		goto abort;
-	}
-
-	errno = 0;
-	if (fread(device_buf,sizeof(char),SECTOR_SIZE,device) < SECTOR_SIZE) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Failed to read from '%s'",argv0,device_path);
-		print_error(err);
+	/* seek and read boot sector */
+	if (checked_fseek(&device,device_path,partition_offset*SECTOR_SIZE,SEEK_SET)
+	    || checked_fread(&device,device_path,device_buf,sizeof(char),SECTOR_SIZE)) {
 		error = 1;
 		goto abort;
 	}
@@ -334,7 +351,7 @@ static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long 
 		}
 
 		if (error) {
-			fprintf(stderr,"%s: vbrinstall: Partition must be valid FAT volume for FAT type detection!\n",argv0);
+			fprintf(stderr,"%s: vbrinstall: Partition must be valid FAT volume for automatic detection!\n",argv0);
 			goto abort;
 		}
 
@@ -351,23 +368,9 @@ static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long 
 	}
 
 	if (verbose) printf("Reading from bootsector binary '%s'\n",binary_path);
-
-	errno = 0;
-	if ((binary = fopen(binary_path,"rb")) == NULL) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Could not open '%s'",argv0,binary_path);
-		print_error(err);
+	if (checked_fopen(&binary,binary_path,"rb") || checked_fread(&binary,binary_path,binary_buf,sizeof(char),SECTOR_SIZE)) {
 		error = 1;
 		goto abort;
-	}
-
-	errno = 0;
-	if (fread(binary_buf,sizeof(char),SECTOR_SIZE,binary) < SECTOR_SIZE) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Failed to read from '%s'",argv0,binary_path);
-		print_error(err);
-		error = 1;
-		goto end;
 	}
 
 	/* copy first three bytes */
@@ -392,10 +395,10 @@ static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long 
 
 	/* copy OEM name, if desired */
 	if (write_oem_name) {
-		unsigned char *p = binary_buf + BPB_OEM_NAME;
+		const unsigned char *p = binary_buf + BPB_OEM_NAME;
 		/* if custom OEM name was specified use that instead of the bootsector OEM name */
 		if (oem_name[0]) {
-			p = (unsigned char *)oem_name;
+			p = (const unsigned char *)oem_name;
 			if (verbose) printf("Setting OEM name to '%s'\n",oem_name);
 		}
 		for (i = 0; i < 8; i++) device_buf[BPB_OEM_NAME + i] = p[i];
@@ -411,21 +414,9 @@ static int write_vbr(char *argv0, int verbose, char *device_path, unsigned long 
 		for (i = 0; i < 11; i++) device_buf[BOOT_FILE_NAME+i] = second_stage[i];
 		printf("Setting second stage filename to '%s'\n",second_stage);
 	}
-
-	errno = 0;
-	if (fseek(device,partition_offset*SECTOR_SIZE,SEEK_SET)) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Failed to seek on '%s'",argv0,device_path);
-		print_error(err);
-		error = 1;
-		goto end;
-	}
-
-	errno = 0;
-	if (fwrite(device_buf,sizeof(char),SECTOR_SIZE,device) < SECTOR_SIZE) {
-		int err = errno;
-		fprintf(stderr,"'%s: vbrinstall: Failed to write to '%s'",argv0,device_path);
-		print_error(err);
+	/* write back */
+	if (checked_fseek(&device,device_path,partition_offset*SECTOR_SIZE,SEEK_SET)
+	    || checked_fwrite(&device,device_path,device_buf,sizeof(char),SECTOR_SIZE)) {
 		error = 1;
 		goto end;
 	}
@@ -438,12 +429,12 @@ abort:
 }
 
 
-static void vbrinstall_usage(char *argv0) {
+static void vbrinstall_usage(void) {
 	printf(
 		"Usage: %s vbrinstall [<options>] [--] <device> [<bootsector> <bpb>]\n"
 		"\n"
 		"Write <bootsector> to volume boot record of <device>.\n"
-		"<bpb> must be none, fat12, fat16, and fat32 and determines what bytes of the\n"
+		"<bpb> must be none, fat12, fat16, or fat32, and determines what bytes of the\n"
 		"BIOS parameter block (BPB) should not be overwritten.\n"
 		"If <bootsector> is not specified, the utility will automatically detect whether\n"
 		"it is a FAT12, FAT16, or FAT32 partition and install the corresponding boot\n"
@@ -474,11 +465,11 @@ static void vbrinstall_usage(char *argv0) {
 static int vbrinstall(int argc, char **argv) {
 	int error = 0;
 	/* parse options */
-	enum option_type shortopt_type[2] = {NONE,NONE};
-	char *shortopt_arg[2] = {NULL,NULL};
-	char *longopt[6] = {"help","load-offset","oem-name","partition-offset","second-stage","verbose"};
-	enum option_type longopt_type[6] = {NONE,MANDATORY,OPTIONAL,MANDATORY,MANDATORY,NONE};
-	char *longopt_arg[6] = {NULL,NULL,NULL,NULL,NULL,NULL};
+	const enum option_type shortopt_type[2] = {NONE,NONE};
+	const char *shortopt_arg[2] = {NULL,NULL};
+	const char *longopt[6] = {"help","load-offset","oem-name","partition-offset","second-stage","verbose"};
+	const enum option_type longopt_type[6] = {NONE,MANDATORY,OPTIONAL,MANDATORY,MANDATORY,NONE};
+	const char *longopt_arg[6] = {NULL,NULL,NULL,NULL,NULL,NULL};
 	int *posarg = calloc(argc-2,sizeof(int));
 	int posarg_count;
 
@@ -491,7 +482,7 @@ static int vbrinstall(int argc, char **argv) {
 	if (posarg_count >= 0) {
 		/* interpret results */
 		int verbose = shortopt_arg[1] != NULL || longopt_arg[5] != NULL;
-		if (shortopt_arg[0] != NULL || longopt_arg[0] != NULL) vbrinstall_usage(argv[0]);
+		if (shortopt_arg[0] != NULL || longopt_arg[0] != NULL) vbrinstall_usage();
 		else if (posarg_count < 1) {
 			fprintf(stderr,"%s: vbrinstall: Device path expected!\n",argv[0]);
 			error = 1;
@@ -568,7 +559,7 @@ static int vbrinstall(int argc, char **argv) {
 						goto end;
 					}
 				}
-				error = write_vbr(argv[0], verbose, argv[posarg[0]], partition_offset, posarg_count == 3 ? argv[posarg[1]] : NULL, type,
+				error = write_vbr(verbose, argv[posarg[0]], partition_offset, posarg_count == 3 ? argv[posarg[1]] : NULL, type,
 				                  write_oem_name, oem_name, load_offset, second_stage);
 				goto end;
 			}
@@ -584,6 +575,8 @@ end:
 
 int main(int argc, char **argv) {
 	if (argc >= 2) {
+		argv0 = argv[0];
+		argv1 = argv[1];
 		if (!strcmp(argv[1],"help") || !strcmp(argv[1],"--help") || !strcmp(argv[1],"-h")) {
 			printf(
 				"Usage: %s <command> [<args>]\n"
