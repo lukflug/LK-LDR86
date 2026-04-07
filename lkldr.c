@@ -129,11 +129,11 @@ enum option_type {
  * longopt - array of pointers to longopt strings
  * longopt_type - specifies whether option expects (not) having an argument
  * longopt_arg - will be filled with pointers to argument, or empty string if there is no such argument
- * posarg - pointer to array of length argc-2, which will get filled with the argv indices of positional arguments
+ * posarg - pointer to array of length argc-2, which will get filled with pointers to positional arguments
  * Return value is the amount of positional arguments
  */
 static int parse_options(int argc, char **argv, const char *shortopt, const enum option_type *shortopt_type, const char **shortopt_arg,
-                         int longopt_count, const char **longopt, const enum option_type *longopt_type, const char **longopt_arg, int *posarg) {
+                         int longopt_count, const char **longopt, const enum option_type *longopt_type, const char **longopt_arg, const char **posarg) {
 	int posarg_count = 0;
 	int shortopt_count = strlen(shortopt);
 	int i;
@@ -142,7 +142,7 @@ static int parse_options(int argc, char **argv, const char *shortopt, const enum
 	for (i = 2; i < argc; i++) {
 		if (argv[i][0] != '-' || !argv[i][1]) {
 			/* positional argument */
-			posarg[posarg_count] = i;
+			posarg[posarg_count] = argv[i];
 			posarg_count++;
 		} else if (argv[i][1] != '-') {
 			/* short option */
@@ -169,7 +169,7 @@ static int parse_options(int argc, char **argv, const char *shortopt, const enum
 		} else if (!argv[i][2]) {
 			/* double dash => end of options */
 			while (++i < argc) {
-				posarg[posarg_count] = i;
+				posarg[posarg_count] = argv[i];
 				posarg_count++;
 			}
 		} else {
@@ -470,7 +470,7 @@ static int vbrinstall(int argc, char **argv) {
 	const char *longopt[6] = {"help","load-offset","oem-name","partition-offset","second-stage","verbose"};
 	const enum option_type longopt_type[6] = {NONE,MANDATORY,OPTIONAL,MANDATORY,MANDATORY,NONE};
 	const char *longopt_arg[6] = {NULL,NULL,NULL,NULL,NULL,NULL};
-	int *posarg = calloc(argc-2,sizeof(int));
+	const char **posarg = calloc(argc-2,sizeof(const char **));
 	int posarg_count;
 
 	if (posarg == NULL) {
@@ -549,17 +549,17 @@ static int vbrinstall(int argc, char **argv) {
 			if (!error) {
 				enum bpb_type type = RAW;
 				if (posarg_count == 3) {
-					if (!strcmp(argv[posarg[2]],"none")) type = RAW;
-					else if (!strcmp(argv[posarg[2]],"fat12")) type = FAT12;
-					else if (!strcmp(argv[posarg[2]],"fat16")) type = FAT16;
-					else if (!strcmp(argv[posarg[2]],"fat32")) type = FAT32;
+					if (!strcmp(posarg[2],"none")) type = RAW;
+					else if (!strcmp(posarg[2],"fat12")) type = FAT12;
+					else if (!strcmp(posarg[2],"fat16")) type = FAT16;
+					else if (!strcmp(posarg[2],"fat32")) type = FAT32;
 					else {
 						fprintf(stderr,"%s: vbrinstall: BPB type must be none, FAT12, FAT16, or FAT32.\n",argv[0]);
 						error = 1;
 						goto end;
 					}
 				}
-				error = write_vbr(verbose, argv[posarg[0]], partition_offset, posarg_count == 3 ? argv[posarg[1]] : NULL, type,
+				error = write_vbr(verbose, posarg[0], partition_offset, posarg_count == 3 ? posarg[1] : NULL, type,
 				                  write_oem_name, oem_name, load_offset, second_stage);
 				goto end;
 			}
