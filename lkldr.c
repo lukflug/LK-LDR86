@@ -11,8 +11,8 @@
 #include <string.h>
 #include <errno.h>
 #include <limits.h>
+#include "lkldr.h"
 
-#define COPYRIGHT "Copyright (c) 2026 lukflug. Licensed under MIT."
 #ifndef VERSION
 #define VERSION "UNVERSIONED"
 #endif
@@ -188,10 +188,8 @@ static int parse_options(int argc, char **argv, const char *shortopt, const enum
 				if (equals_sign && longopt_type[j] == NONE) {
 					fprintf(stderr,"%s: %s: Option '%s' does not expect argument!\n",argv[0],argv[1],argv[i]);
 					error = 1;
-				} else if (equals_sign && longopt_type[j] != NONE) {
-					argv[i] += arg+1;
-					longopt_arg[j] = argv[i];
-				} else if (longopt_type[j] != NONE && i+1 < argc && (argv[i+1][0] != '-' || !argv[i+1][1])) longopt_arg[j] = argv[++i];
+				} else if (equals_sign && longopt_type[j] != NONE) longopt_arg[j] = argv[i]+arg+1;
+				else if (longopt_type[j] != NONE && i+1 < argc && (argv[i+1][0] != '-' || !argv[i+1][1])) longopt_arg[j] = argv[++i];
 				else if (longopt_type[j] != MANDATORY) longopt_arg[j] = "";
 				else {
 					fprintf(stderr,"%s: %s: Option '%s' expects argument!\n",argv[0],argv[1],argv[i]);
@@ -263,8 +261,9 @@ enum bpb_type {
 static int write_vbr(int verbose, const char *device_path, unsigned long partition_offset, const char *binary_path, enum bpb_type type,
                      int write_oem_name, const char *oem_name, long load_offset, const char *second_stage) {
 	int error = 0;
-	FILE *device, *binary;
+	FILE *device;
 	static unsigned char device_buf[SECTOR_SIZE], binary_buf[SECTOR_SIZE]; /* 1 kiB of stack space might be an imposition on some systems */
+	const unsigned char *bootsector = binary_buf;
 	int i;
 
 	if (verbose) printf("Writing to device '%s' at LBA %lu\n",device_path,partition_offset);
@@ -276,13 +275,13 @@ static int write_vbr(int verbose, const char *device_path, unsigned long partiti
 	if (partition_offset >= LONG_MAX/SECTOR_SIZE) {
 		fprintf(stderr,"%s: vbrinstall: Integer overflow from partition offset!",argv0);
 		error = 1;
-		goto abort;
+		goto end;
 	}
 	/* seek and read boot sector */
 	if (checked_fseek(&device,device_path,partition_offset*SECTOR_SIZE,SEEK_SET)
 	    || checked_fread(&device,device_path,device_buf,sizeof(char),SECTOR_SIZE)) {
 		error = 1;
-		goto abort;
+		goto end;
 	}
 
 	if (binary_path == NULL) {
@@ -352,29 +351,32 @@ static int write_vbr(int verbose, const char *device_path, unsigned long partiti
 
 		if (error) {
 			fprintf(stderr,"%s: vbrinstall: Partition must be valid FAT volume for automatic detection!\n",argv0);
-			goto abort;
+			goto end;
 		}
 
 		if (type == FAT12) {
-			binary_path = "bin/boot12.bin";
-			if (verbose) printf("FAT type detected: FAT12, using boot12.bin\n");
+			bootsector = boot12;
+			if (verbose) printf("FAT type detected: FAT12\n");
 		} else if (type == FAT16) {
-			binary_path = "bin/boot16.bin";
-			if (verbose) printf("FAT type detected: FAT16, using boot16.bin\n");
+			bootsector = boot16;
+			if (verbose) printf("FAT type detected: FAT16\n");
 		} else if (type == FAT32) {
-			binary_path = "bin/boot32.bin";
-			if (verbose) printf("FAT type detected: FAT32, using boot32.bin\n");
+			bootsector = boot32;
+			if (verbose) printf("FAT type detected: FAT32\n");
 		}
-	}
-
-	if (verbose) printf("Reading from bootsector binary '%s'\n",binary_path);
-	if (checked_fopen(&binary,binary_path,"rb") || checked_fread(&binary,binary_path,binary_buf,sizeof(char),SECTOR_SIZE)) {
-		error = 1;
-		goto abort;
+	} else {
+		FILE *binary;
+		/* open bootsector binary */
+		if (verbose) printf("Reading from bootsector binary '%s'\n",binary_path);
+		if ((error = checked_fopen(&binary,binary_path,"rb"))) goto end;
+		/* read from it */
+		error = checked_fread(&binary,binary_path,binary_buf,sizeof(char),SECTOR_SIZE);
+		fclose(binary);
+		if (error) goto end;
 	}
 
 	/* copy first three bytes */
-	for (i = 0; i < BPB_OEM_NAME; i++) device_buf[i] = binary_buf[i];
+	for (i = 0; i < BPB_OEM_NAME; i++) device_buf[i] = bootsector[i];
 	/* copy the stuff after the BPB */
 	switch (type) {
 	case RAW:
@@ -391,11 +393,11 @@ static int write_vbr(int verbose, const char *device_path, unsigned long partiti
 		if (verbose) printf("Assuming FAT32 (E)BPB\n");
 		break;
 	}
-	for (; i < SECTOR_SIZE; i++) device_buf[i] = binary_buf[i];
+	for (; i < SECTOR_SIZE; i++) device_buf[i] = bootsector[i];
 
 	/* copy OEM name, if desired */
 	if (write_oem_name) {
-		const unsigned char *p = binary_buf + BPB_OEM_NAME;
+		const unsigned char *p = bootsector + BPB_OEM_NAME;
 		/* if custom OEM name was specified use that instead of the bootsector OEM name */
 		if (oem_name[0]) {
 			p = (const unsigned char *)oem_name;
@@ -412,7 +414,7 @@ static int write_vbr(int verbose, const char *device_path, unsigned long partiti
 	/* write custom second stage file name */
 	if (second_stage[0]) {
 		for (i = 0; i < 11; i++) device_buf[BOOT_FILE_NAME+i] = second_stage[i];
-		printf("Setting second stage filename to '%s'\n",second_stage);
+		if (verbose) printf("Setting second stage filename to '%s'\n",second_stage);
 	}
 	/* write back */
 	if (checked_fseek(&device,device_path,partition_offset*SECTOR_SIZE,SEEK_SET)
@@ -422,8 +424,6 @@ static int write_vbr(int verbose, const char *device_path, unsigned long partiti
 	}
 
 end:
-	fclose(binary);
-abort:
 	fclose(device);
 	return error;
 }
@@ -582,12 +582,17 @@ int main(int argc, char **argv) {
 				"Usage: %s <command> [<args>]\n"
 				"\n"
 				"List of commands:\n"
-				"  help        display this message\n"
+				"  help        display this message\n"
 				"  vbrinstall  install volume boot record\n"
 				"  version     display version and copyright information\n", argv[0]);
 			return EXIT_SUCCESS;
 		} else if (!strcmp(argv[1],"version")) {
-			printf("LK-LDR/86 Installation Utility version " VERSION " build " BUILD "\n" COPYRIGHT "\n");
+			printf(
+				"LK-LDR/86 Installation Utility version " VERSION " build " BUILD "\n"
+				"Copyright (c) 2026 lukflug.\n"
+				"Distributed under the terms of the MIT license.\n"
+				"There is ABSOLUTELY NO WARRANTY, to the extent permitted by law.\n"
+			);
 			return EXIT_SUCCESS;
 		} else if (!strcmp(argv[1],"vbrinstall")) return vbrinstall(argc,argv);
 		fprintf(stderr,"%s: Unrecognized command '%s'!\n",argv[0],argv[1]);

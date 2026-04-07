@@ -25,7 +25,7 @@ VOLUME_LABEL := LKLDR86
 all: $(IMGFILES)
 
 testqemu: img/1440kB.img
-	qemu-system-i386 -debugcon stdio -fda img/1440kB.img -soundhw pcspk
+	qemu-system-i386 -debugcon stdio -fda img/1440kB.img
 
 testbochs: img/1440kB.img
 	-bochs
@@ -41,6 +41,23 @@ $(IMGFILES): img/%kB.img: $(ASM_BIN) $(BOOT_BIN) lkldr.fs bin/lkldr | img
 	mattrib -i $@ -a +r \*.\*
 	mattrib -i $@ +s lkldr86.bin lkldr.fs
 
+bin/lkldr: lkldr.c bin/lkldr.h | bin
+	$(CC) $(CFLAGS) -Ibin -DVERSION=\"$(VERSION)\" -DBUILD=\"$(BUILD)\" $< -o $@
+
+bin/lkldr.h: $(BOOT_BIN) | bin
+	echo '' > $@
+	echo 'static const unsigned char boot12[] = {' >> $@
+	od -v -t x1 -A n bin/boot12.bin | sed 's/^ /\t0x/;s/ /, 0x/g;s/$$/,/;$$s/,$$//' >> $@
+	echo '};' >> $@
+	echo '' >> $@
+	echo 'static const unsigned char boot16[] = {' >> $@
+	od -v -t x1 -A n bin/boot16.bin | sed 's/^ /\t0x/;s/ /, 0x/g;s/$$/,/;$$s/,$$//' >> $@
+	echo '};' >> $@
+	echo '' >> $@
+	echo 'static const unsigned char boot32[] = {' >> $@
+	od -v -t x1 -A n bin/boot32.bin | sed 's/^ /\t0x/;s/ /, 0x/g;s/$$/,/;$$s/,$$//' >> $@
+	echo '};' >> $@
+
 $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
 	$(ASM) $< -o $@ -MF dep/$*.d $(ASMFLAGS)
 	touch $@
@@ -48,9 +65,6 @@ $(ASM_BIN): bin/%.bin: %.asm dep/%.d | bin dep
 $(BOOT_BIN): bin/boot%.bin: boot.asm dep/boot%.d | bin dep
 	$(ASM) $< -o $@ -MF dep/boot$*.d -DFAT_TYPE=$* $(ASMFLAGS)
 	touch $@
-
-bin/lkldr: lkldr.c | bin
-	$(CC) $(CFLAGS) -DVERSION=\"$(VERSION)\" -DBUILD=\"$(BUILD)\" $< -o $@
 
 $(DEPFILES):
 
