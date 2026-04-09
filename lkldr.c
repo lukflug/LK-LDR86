@@ -589,7 +589,7 @@ int main(int argc, char **argv) {
 		} else if (!strcmp(argv[1],"version")) {
 			printf(
 				"LK-LDR/86 Installation Utility version " VERSION " build " BUILD "\n"
-				"Copyright (c) 2026 lukflug.\n"
+				"Copyright (c) 2025, 2026 lukflug.\n"
 				"Distributed under the terms of the MIT license.\n"
 				"There is ABSOLUTELY NO WARRANTY, to the extent permitted by law.\n"
 			);
