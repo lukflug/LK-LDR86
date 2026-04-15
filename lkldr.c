@@ -438,7 +438,7 @@ static void vbrinstall_usage(void) {
 		"BIOS parameter block (BPB) should not be overwritten.\n"
 		"If <bootsector> is not specified, the utility will automatically detect whether\n"
 		"it is a FAT12, FAT16, or FAT32 partition and install the corresponding boot\n"
-		"sector image (boot12.bin, boot16.bin, or boot32.bin).\n"
+		"sector image.\n"
 		"\n", argv0);
 	printf(
 		"Options:\n"
@@ -455,10 +455,9 @@ static void vbrinstall_usage(void) {
 		"  -v, --verbose                     enable verbose mode\n"
 		"\n"
 		"The <filename> must be a valid FAT short 8.3 filename.\n"
-		"<offset> must be an unsigned integer smaller than 0x10000 that is not within\n"
-		"the range 0x7800 to 0x7FFF, and must be at least 0x0500.\n"
+		"<offset> must be an unsigned integer within the range 0x0500 to 0x%04X.\n"
 		"<name> must be at most eight characters.\n"
-		"<LBA> must be a 32-bit unsigned integer.\n");
+		"<LBA> must be a 32-bit unsigned integer.\n",0x7800-SECTOR_SIZE);
 }
 
 
@@ -503,12 +502,8 @@ static int vbrinstall(int argc, char **argv) {
 				/* parse load offset argument */
 				char *end;
 				load_offset = strtol(longopt_arg[1],&end,0);
-				if (end != longopt_arg[1]+strlen(longopt_arg[1]) || load_offset < 0x0500 || load_offset >= 0x10000) {
-					fprintf(stderr,"%s: vbrinstall: Load offset must be an integer between 0x0500 and 0x10000!\n",argv[0]);
-					error = 1;
-				}
-				if (load_offset >= 0x7800 && load_offset < 0x8000) {
-					fprintf(stderr,"%s: vbrinstall: Load offset must not be between 0x7800 and 0x8000!\n",argv[0]);
+				if (end != longopt_arg[1]+strlen(longopt_arg[1]) || load_offset < 0x0500 || load_offset > 0x7800-SECTOR_SIZE) {
+					fprintf(stderr,"%s: vbrinstall: Load offset must be an integer between 0x0500 and 0x%04X!\n",argv[0],0x7800-SECTOR_SIZE);
 					error = 1;
 				}
 			}
