@@ -98,15 +98,13 @@ bootloader:
 			call loadFile
 
 			mov si, errorMessage											; Display error message
+			mov cx, errorMessage.end-errorMessage
 .loop			lodsb														; Get next byte
-				test al, al													; Check if zero
-				jz short .break
 				mov ah, BIOS.VIDEO_TTY										; Print character
 				xor bx, bx
 				int BIOS.VIDEO_INT											; bp may not be preserved if it scrolls (http://www.ctyme.com/intr/rb-0106.htm)
-				jmp .loop
-
-.break		xor ah, ah														; Wait for key and boot to BASIC
+				loop .loop
+			xor ah, ah														; Wait for key and boot to BASIC
 			int BIOS.KEY_INT
 			int BIOS.BASIC_INT
 			jmp $															; Some BIOSes return on int 18h (http://www.ctyme.com/intr/rb-2241.htm)
@@ -122,17 +120,18 @@ loadFile:
 			int BIOS.DISK_INT
 
 			mov si, loadSector.patch+0x0001									; Reset to CHS
-			mov byte [si], 0x00
+			mov byte [si], loadSector.chs-loadSector.patch-0x0002
 			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
 			mov bx, BIOS.DISK_LBA_CHECK_IN
 			int BIOS.DISK_INT
 			jc short .chs
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
-			mov byte [si], loadSector.lba-loadSector.chs					; Set to LBA if supported
+			mov byte [si], loadSector.lba-loadSector.patch-0x0002			; Set to LBA if supported
 
 .chs		mov ax, [reservedSectors]										; Load FAT
 			call add16
+			jc short .error
 			mov bx, BootSector.FAT_BUFFER
 			call loadSectorZero
 			jc short .error
@@ -148,6 +147,7 @@ loadFile:
 			shl ax, 1
 			rcl dx, 1
 			call add32
+			jc short .error
 
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 %if FAT_TYPE != 32
@@ -167,6 +167,7 @@ loadFile:
 			mov cx, SECTOR_SIZE/FATEntry.SIZE
 			div cx
 			call add16														; Store first data cluster
+			jc short .error
 %endif
 
 			call readFile													; Find file and read into memory
@@ -262,13 +263,13 @@ readFile:
 %elif FAT_TYPE == 16
 				cmp ax, SECTOR_SIZE >> 1									; Check if it is still inside first sector
 				jae short .error
-				mov si, ax													; Calculate offset inside FAT
+				xchg si, ax													; Calculate offset inside FAT
 				shl si, 1
 				mov ax, [si+BootSector.FAT_BUFFER]							; Get entry value
 %elif FAT_TYPE == 32
 				cmp ax, SECTOR_SIZE >> 2									; Check if it is still inside first sector
 				jae short .error
-				mov si, ax													; Calculate offset inside FAT
+				xchg si, ax													; Calculate offset inside FAT
 				times 2 shl si, 1
 				add si, BootSector.FAT_BUFFER								; Load FAT entry
 				lodsw
@@ -327,7 +328,8 @@ loadSectorZero:
 loadSector:
 			add ax, [BootSector.FIRST_DATA_CLUSTER]							; Convert LSN to LBA
 			adc dx, [BootSector.FIRST_DATA_CLUSTER+0x0002]
-.patch		jmp short .chs
+.patch		jnc short .chs
+.return		ret
 
 .chs		div word [BootSector.SECTORS_PER_CYLINDER]						; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
 			mov ch, al														; Set cylinder number
@@ -335,7 +337,7 @@ loadSector:
 			times 2 shr ax, 1
 			mov cl, al
 
-			mov ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
+			xchg ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
 			xor dx, dx
 			div word [sectorsPerTrack]
 			inc dx															; Store sector number
@@ -356,8 +358,7 @@ loadSector:
 				jz short .return
 				xor ah, ah													; Reset disk
 				int BIOS.DISK_INT
-				jnc short .read
-.return		ret
+				jmp short .read
 
 .lba		xor si, si														; Construct DAP on stack
 			push si															; Higher dword of LBA = 0
@@ -380,9 +381,11 @@ loadSector:
 
 
 %if FAT_TYPE != 32
-errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A, 0x00
+errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
+.end:
 %else
-errorMessage				db 'Err!', 0x0D, 0x0A, 0x00
+errorMessage				db 'Err!', 0x0D, 0x0A
+.end:
 %endif
 
 							times (BootSector.LOAD_OFFSET-BootSector.BASE)-($-$$) db 0x00
