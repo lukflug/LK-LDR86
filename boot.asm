@@ -172,7 +172,7 @@ loadFile:
 
 			call readFile													; Find file and read into memory
 			jc short .error
-			jmp near [BootSector.LOAD_OFFSET]								; Transfer control
+			jmp near [loadOffset]											; Transfer control
 
 .error		equ readFile.return
 
@@ -186,7 +186,7 @@ loadFile:
 ; [BootSector.FILE_SIZE] - size of loaded file in bytes
 ; cf - set on error; clear otherwise
 readFile:
-.dirEntryLoop	mov di, BootSector.FILE_NAME								; Compare filenames
+.dirEntryLoop	mov di, fileName											; Compare filenames
 				mov si, bx
 				mov cx, FATEntry.ATTRIBUTES
 				repe cmpsb
@@ -203,11 +203,11 @@ readFile:
 %if FAT_TYPE == 32
 			lea si, [bx+FATEntry.FIRST_CLUSTER_HIGH]
 %endif
-			cmp word [bx+FATEntry.FILE_SIZE+0x0002], 0x0000					; Check if file size is above 64k
+			cmp word [bx+FATEntry.FILE_SIZE+0x0002], cx						; Check if file size is above 64k (cx = 0 from repe cmpsb)
 			jne short .error
 			mov di, [bx+FATEntry.FILE_SIZE]									; Get file size
 			mov [BootSector.FILE_SIZE], di
-			mov bx, [BootSector.LOAD_OFFSET]								; Get load offset
+			mov bx, [loadOffset]											; Get load offset
 			add di, bx														; Save end of file in memory for later
 			jc short .error
 			cmp di, BootSector.DIR_BUFFER-SECTOR_SIZE						; Make sure file would not overwrite sector
@@ -389,7 +389,7 @@ errorMessage				db 'Error!', 0x0D, 0x0A
 %endif
 
 							times (BootSector.FILE_NAME-BootSector.BASE)-($-$$) db 0x00
-							db 'LKLDR86 BIN'								; Filename to load
-							dw 0x0600										; Load offset
-							dw readFile										; Read function pointer
+fileName					db 'LKLDR86 BIN'								; Filename to load
+loadOffset					dw 0x0600										; Load offset
+entryPoint						dw readFile										; Read function pointer
 							dw BootSector.BOOT_SIGNATURE
