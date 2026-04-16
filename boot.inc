@@ -49,16 +49,15 @@
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         |                         |
 ;         +-------------------------+
-; 0x07DEE |    file load offset     | BootSector.LOAD_OFFSET
-; 0x07DEF |                         |
-;         +-------------------------+
-; 0x07DF0 |     short filename      | BootSector.FILE_NAME
+; 0x07DEF |     short filename      | BootSector.FILE_NAME
 ;         | (in FAT on-disk format) |
-; 0x07DFA |  (padded with spaces)   |
+; 0x07DF9 |  (padded with spaces)   |
 ;         +-------------------------+
-; 0x07DFB |   read file function    | BootSector.ENTRY_POINT
-; 0x07DFC |       entry point       |
-; 0x07DFD |                         |
+; 0x07DFA |    file load offset     | BootSector.LOAD_OFFSET
+; 0x07DFB |                         |
+;         +-------------------------+
+; 0x07DFC |   read file function    | BootSector.ENTRY_POINT
+; 0x07DFD |         pointer         |
 ;         +-------------------------+
 ; 0x07DFE |           0x55          | BootSector.BOOT_SIGNATURE
 ; 0x07DFF |           0xAA          |
@@ -112,9 +111,9 @@ BootSector:
 .DIR_BUFFER					equ .BASE-2*SECTOR_SIZE
 .DRIVE_NUMBER				equ .BASE+EBPB.RESERVED_BYTE
 .END						equ .BASE+0x0200
-.LOAD_OFFSET				equ .END-0x0012
-.FILE_NAME					equ .END-0x0010
-.ENTRY_POINT				equ .END-0x0005
+.FILE_NAME					equ .END-0x0011
+.LOAD_OFFSET				equ .END-0x0006
+.ENTRY_POINT				equ .END-0x0004
 .SIGNATURE					equ .END-0x0002
 .FILE_SIZE					equ .END
 .STACK_BASE					equ .END+0x0200

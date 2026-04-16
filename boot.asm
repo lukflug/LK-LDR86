@@ -104,7 +104,7 @@ bootloader:
 				xor bx, bx
 				int BIOS.VIDEO_INT											; bp may not be preserved if it scrolls (http://www.ctyme.com/intr/rb-0106.htm)
 				loop .loop
-			xor ah, ah														; Wait for key and boot to BASIC
+			cbw																; Wait for key and boot to BASIC (set ah = 0)
 			int BIOS.KEY_INT
 			int BIOS.BASIC_INT
 			jmp $															; Some BIOSes return on int 18h (http://www.ctyme.com/intr/rb-2241.htm)
@@ -186,7 +186,7 @@ loadFile:
 ; [BootSector.FILE_SIZE] - size of loaded file in bytes
 ; cf - set on error; clear otherwise
 readFile:
-.dirEntryLoop	mov di, fileName											; Compare filenames
+.dirEntryLoop	mov di, BootSector.FILE_NAME								; Compare filenames
 				mov si, bx
 				mov cx, FATEntry.ATTRIBUTES
 				repe cmpsb
@@ -356,7 +356,7 @@ loadSector:
 
 .retry			dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
 				jz short .return
-				xor ah, ah													; Reset disk
+				cbw															; Reset disk (set ah = 0)
 				int BIOS.DISK_INT
 				jmp short .read
 
@@ -384,12 +384,12 @@ loadSector:
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
 .end:
 %else
-errorMessage				db 'Err!', 0x0D, 0x0A
+errorMessage				db 'Error!', 0x0D, 0x0A
 .end:
 %endif
 
-							times (BootSector.LOAD_OFFSET-BootSector.BASE)-($-$$) db 0x00
-fileOffset					dw 0x0600
-fileName					db 'LKLDR86 BIN'
-			jmp near readFile
+							times (BootSector.FILE_NAME-BootSector.BASE)-($-$$) db 0x00
+							db 'LKLDR86 BIN'								; Filename to load
+							dw 0x0600										; Load offset
+							dw readFile										; Read function pointer
 							dw BootSector.BOOT_SIGNATURE
