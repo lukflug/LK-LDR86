@@ -2,10 +2,10 @@
 ; LK-LDR/86
 ; Boot Sector Interface Header
 ; The volume boot record expects to be loaded in real mode at linear address
-; 0x07C00 into a PC-compatible BIOS environment. It loads a fragmented file on a
-; FAT partition (the boot sector comes in three variants for FAT12, FAT16, and
-; FAT32, which need to match the partition the boot sector is installed on).
-; The boot drive is passed to the boot sector via dl. The partition is
+; 0x07C00 into a PC-compatible BIOS environment. It loads a fragmented file on
+; a FAT partition (the boot sector comes in three variants for FAT12, FAT16,
+; and FAT32, which need to match the partition the boot sector is installed
+; on). The boot drive is passed to the boot sector via dl. The partition is
 ; identified based on the hidden sector field on the BPB. If loading fails for
 ; whatever reasons, the drive number in the EBPB field is tried before
 ; displaying an error message. If the file is successfully loaded, the boot
@@ -49,15 +49,12 @@
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         |                         |
 ;         +-------------------------+
-; 0x07DEF |     short filename      | BootSector.FILE_NAME
+; 0x07DF1 |     short filename      | BootSector.FILE_NAME
 ;         | (in FAT on-disk format) |
-; 0x07DF9 |  (padded with spaces)   |
+; 0x07DFB |  (padded with spaces)   |
 ;         +-------------------------+
-; 0x07DFA |    file load offset     | BootSector.LOAD_OFFSET
-; 0x07DFB |                         |
-;         +-------------------------+
-; 0x07DFC |   read file function    | BootSector.ENTRY_POINT
-; 0x07DFD |         pointer         |
+; 0x07DFC |    file load offset     | BootSector.LOAD_OFFSET
+; 0x07DFD |                         |
 ;         +-------------------------+
 ; 0x07DFE |           0x55          | BootSector.BOOT_SIGNATURE
 ; 0x07DFF |           0xAA          |
@@ -84,8 +81,9 @@
 ; 0x07FFF |       ^^ stack ^^       |
 ;         +-------------------------+
 ;
-; By calling BootSector.ENTRY_POINT, additional files may be loaded after the
-; VBR loaded the initial file. This entry point assumes:
+; The loaded program may call the last near address on the stack after entry,
+; in order to load additional files after the VBR loaded the initial file. This
+; entry point assumes:
 ; - bx = BootSector.DIR_BUFFER
 ; - df = 0
 ; - if = 1
@@ -97,8 +95,8 @@
 ; - [BootSector.FILE_SIZE] is set to the size of the loaded file
 ; - cf is set on error and clear on success
 ; General-purpose registers and flags other than df and if must not be assumed
-; to be preserved. In addition, the first sector of the root directory entry and
-; file allocation table must provide enough information to load the file.
+; to be preserved. In addition, the first sector of the root directory entry
+; and file allocation table must provide enough information to load the file.
 %ifndef SECTOR_SIZE
 %define SECTOR_SIZE 0x0200
 %define SECTOR_SHIFT 0x09
@@ -111,9 +109,8 @@ BootSector:
 .DIR_BUFFER					equ .BASE-2*SECTOR_SIZE
 .DRIVE_NUMBER				equ .BASE+EBPB.RESERVED_BYTE
 .END						equ .BASE+0x0200
-.FILE_NAME					equ .END-0x0011
-.LOAD_OFFSET				equ .END-0x0006
-.ENTRY_POINT				equ .END-0x0004
+.FILE_NAME					equ .END-0x000F
+.LOAD_OFFSET				equ .END-0x0004
 .SIGNATURE					equ .END-0x0002
 .FILE_SIZE					equ .END
 .BOOT_DRIVE					equ .END+0x0002

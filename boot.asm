@@ -98,6 +98,17 @@ bootloader:
 			jmp $															; Some BIOSes return on int 18h (http://www.ctyme.com/intr/rb-2241.htm)
 
 
+add16:
+			xor dx, dx
+add32:
+			add [BootSector.FIRST_DATA_CLUSTER], ax
+			adc [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+			jc short .error
+			ret
+
+.error		equ readFile.eof												; Return from calling function
+
+
 ; Load FAT and directory sectors, and read out file
 ; dl - drive number
 ; Only returns on error
@@ -121,7 +132,7 @@ loadFile:
 			stosw
 
 			lodsw															; Calculate sectors per cylinder
-			mov bx, ax
+			xchg bx, ax
 			lodsw
 			mul bx															; Multiply [sectorsPerTrack] with [headCount]
 			stosw															; Set [BootSector.SECTORS_PER_CYLINDER]
@@ -169,21 +180,9 @@ loadFile:
 
 			call readFile													; Find file and read into memory
 			jc short .error
-			jmp near [loadOffset]											; Transfer control
+			call near [loadOffset]											; Transfer control, and push address of readFile on stack
 
 .error		equ readFile.return
-
-
-add16:
-			xor dx, dx
-add32:
-			add [BootSector.FIRST_DATA_CLUSTER], ax
-			adc [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
-			jc short .error
-			ret
-
-.error		pop ax															; Return from calling function
-			ret
 
 
 ; Read file
@@ -206,6 +205,9 @@ readFile:
 				jb short .dirEntryLoop
 .error		stc
 .return		ret
+
+.eof		pop ax															; Note jae = jnc and jb = jc
+			ret
 
 .found		mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
 %if FAT_TYPE == 32
@@ -287,8 +289,6 @@ readFile:
 %endif
 				jmp .clusterLoop
 
-.eof		equ add32.error													; Note jae = jnc and jb = jc
-
 
 ; Load sector using int 13h CHS
 ; dx:ax - LBA
@@ -304,9 +304,9 @@ loadSectorCHS:
 			mov ch, al														; Store cylinder number
 			xor al, al
 			times 2 shr ax, 1												; Store bits 8 and 9 of cylinder number in MSBs of cl
-			mov cl, al
 			test ah, ah														; Make sure calculated number is below 1024
 			jnz short .error
+			mov cl, al
 
 			xchg ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
 			xor dx, dx
@@ -408,12 +408,11 @@ cn2lsn:
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
 .end:
 %else
-errorMessage				;db 'Error!', 0x0D, 0x0A
+errorMessage				db 'Err', 0x0D, 0x0A
 .end:
 %endif
 
 							times (BootSector.FILE_NAME-BootSector.BASE)-($-$$) db 0x00
 fileName					db 'LKLDR86 BIN'								; Filename to load
 loadOffset					dw 0x0600										; Load offset
-entryPoint					dw readFile										; Read function pointer
 							dw BootSector.BOOT_SIGNATURE

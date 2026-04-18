@@ -58,8 +58,8 @@
 #define EBPB32_FILE_SYSTEM 0x0052
 #define EBPB32_END 0x005A
 
-#define BOOT_LOAD_OFFSET (0x0200-0x0006)
-#define BOOT_FILE_NAME (0x0200-0x0011)
+#define BOOT_LOAD_OFFSET (0x0200-0x0004)
+#define BOOT_FILE_NAME (0x0200-0x000F)
 
 static char *argv0, *argv1;
 

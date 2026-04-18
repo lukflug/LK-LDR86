@@ -15,7 +15,8 @@ org 0x0600
 			mov cx, 11
 			rep movsb
 			mov bx, BootSector.DIR_BUFFER
-			call near [BootSector.ENTRY_POINT]
+			mov bp, sp														; Call address on stack
+			call near [bp]
 
 			mov si, message													; Display message
 .loop			lodsb														; Get next byte
