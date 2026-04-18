@@ -81,20 +81,8 @@ bootloader:
 			mov sp, BootSector.STACK_BASE
 			sti
 
-			push word [hiddenSectors+0x0002]								; Set [BootSector.FIRST_DATA_CLUSTER]
-			push word [hiddenSectors]
-
-			push dx
-			mov ax, [sectorsPerTrack]										; Calculate sectors per cylinder
-			mul word [headCount]
-			pop dx
-			push ax															; Set [BootSector.SECTORS_PER_CYLINDER]
-
-			push dx															; Try BIOS drive number first
-			call loadFile
-			pop dx
+			call loadFile													; Try BIOS drive number first
 			mov dl, [driveNumber]											; Try BPB drive number next
-			push dx
 			call loadFile
 
 			mov si, errorMessage											; Display error message
@@ -112,26 +100,37 @@ bootloader:
 
 ; Load FAT and directory sectors, and read out file
 ; dl - drive number
-; [BootSector.BOOT_DRIVE] - drive number
-; [BootSector.SECTORS_PER_CYLINDER] - pre-calculated sectors per cylinder
 ; Only returns on error
 loadFile:
 			xor ah, ah														; Reset disk controller
 			int BIOS.DISK_INT
 
 			mov si, loadSector.patch+0x0001									; Reset to CHS
-			mov byte [si], loadSector.chs-loadSector.patch-0x0002
+			mov byte [si], loadSectorCHS-loadSector.patch-0x0002
 			mov ah, BIOS.DISK_LBA_CHECK										; Check if LBA supported
 			mov bx, BIOS.DISK_LBA_CHECK_IN
 			int BIOS.DISK_INT
 			jc short .chs
 			cmp bx, BIOS.DISK_LBA_CHECK_OUT
 			jne short .chs
-			mov byte [si], loadSector.lba-loadSector.patch-0x0002			; Set to LBA if supported
+			mov byte [si], loadSectorLBA-loadSector.patch-0x0002			; Set to LBA if supported
 
-.chs		mov ax, [reservedSectors]										; Load FAT
+.chs		mov si, sectorsPerTrack
+			mov di, BootSector.BOOT_DRIVE
+			mov al, dl														; Save drive number
+			stosw
+
+			lodsw															; Calculate sectors per cylinder
+			mov bx, ax
+			lodsw
+			mul bx															; Multiply [sectorsPerTrack] with [headCount]
+			stosw															; Set [BootSector.SECTORS_PER_CYLINDER]
+
+			movsw															; Set [BootSector.FIRST_DATA_CLUSTER] to [hiddenSectors]
+			movsw
+
+			mov ax, [reservedSectors]										; Load FAT	
 			call add16
-			jc short .error
 			mov bx, BootSector.FAT_BUFFER
 			call loadSectorZero
 			jc short .error
@@ -147,7 +146,6 @@ loadFile:
 			shl ax, 1
 			rcl dx, 1
 			call add32
-			jc short .error
 
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
 %if FAT_TYPE != 32
@@ -163,11 +161,10 @@ loadFile:
 
 %if FAT_TYPE != 32
 			mov ax, [rootEntries]											; Calculate LBA of first data cluster (skip directory entry for FAT12/16)
-			xor dx, dx
-			mov cx, SECTOR_SIZE/FATEntry.SIZE
-			div cx
+			add ax, SECTOR_SIZE/FATEntry.SIZE-0x0001
+			mov cl, SECTOR_SHIFT-FATEntry.SHIFT
+			shr ax, cl
 			call add16														; Store first data cluster
-			jc short .error
 %endif
 
 			call readFile													; Find file and read into memory
@@ -175,6 +172,18 @@ loadFile:
 			jmp near [loadOffset]											; Transfer control
 
 .error		equ readFile.return
+
+
+add16:
+			xor dx, dx
+add32:
+			add [BootSector.FIRST_DATA_CLUSTER], ax
+			adc [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
+			jc short .error
+			ret
+
+.error		pop ax															; Return from calling function
+			ret
 
 
 ; Read file
@@ -198,8 +207,7 @@ readFile:
 .error		stc
 .return		ret
 
-.found:
-			mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
+.found		mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
 %if FAT_TYPE == 32
 			lea si, [bx+FATEntry.FIRST_CLUSTER_HIGH]
 %endif
@@ -214,7 +222,6 @@ readFile:
 			ja short .error
 
 .clusterLoop	push ax
-.in_range:
 %if FAT_TYPE != 32
 %if FAT_TYPE == 12
 				cmp ax, FAT12.MIN_EOC_CLUSTER								; Check EOF
@@ -223,7 +230,7 @@ readFile:
 %endif
 				jae short .eof
 				sub ax, FAT.MIN_CLUSTER										; Convert CN to LSN
-				jb short .error
+				jb short .eof
 				mov cl, [sectorsPerCluster]
 				xor ch, ch
 				mul cx
@@ -243,7 +250,9 @@ readFile:
 					jc short .eof
 					add bh, SECTOR_SIZE >> 8								; Increase buffer offset
 					inc ax													; Increase LSN
-					dec bp
+					jnz short .skip
+					inc dx
+.skip				dec bp													; Iterate sector loop
 					jnz short .sectorLoop
 				pop ax
 
@@ -278,7 +287,94 @@ readFile:
 %endif
 				jmp .clusterLoop
 
-.eof		pop ax															; Note jae = jnc and jb = jc
+.eof		equ add32.error													; Note jae = jnc and jb = jc
+
+
+; Load sector using int 13h CHS
+; dx:ax - LBA
+; bx - Buffer offset
+; Returns:
+; cf - set on error; clear otherwise
+; Preserves: bx, di, bp
+loadSectorCHS:
+			mov cx, [BootSector.SECTORS_PER_CYLINDER]						; Avoid division error
+			cmp dx, cx
+			jae short .error
+			div word cx														; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
+			mov ch, al														; Store cylinder number
+			xor al, al
+			times 2 shr ax, 1												; Store bits 8 and 9 of cylinder number in MSBs of cl
+			mov cl, al
+			test ah, ah														; Make sure calculated number is below 1024
+			jnz short .error
+
+			xchg ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
+			xor dx, dx
+			div word [sectorsPerTrack]
+			inc dx															; Store sector number
+			or cl, dl
+			mov dh, al														; Set head number
+			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
+
+			mov si, 0x0003													; Reset error counter
+.read			mov ax, BIOS.DISK_READ1										; Read sector (and guard against various int 13h bugs, http://www.ctyme.com/intr/rb-0607.htm)
+				push dx
+				stc
+				int BIOS.DISK_INT
+				sti
+				pop dx
+				jnc short .return
+
+.retry			dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
+				jz short .return
+				cbw															; Reset disk (set ah = 0)
+				int BIOS.DISK_INT
+				jmp .read
+
+.return		equ loadSector.return
+.error		equ readFile.error
+
+
+loadSectorZero:
+			xor ax, ax
+			xor dx, dx
+; Load sector
+; dx:ax - LSN relative to [BootSector.FIRST_DATA_CLUSTER]
+; bx - Buffer offset
+; Returns:
+; cf - set on error; clear otherwise
+; Preserves: bx, di, bp
+loadSector:
+			add ax, [BootSector.FIRST_DATA_CLUSTER]							; Convert LSN to LBA
+			adc dx, [BootSector.FIRST_DATA_CLUSTER+0x0002]
+.patch		jnc short loadSectorCHS
+.return		ret
+
+
+; Load sector using int 13h LBA
+; dx:ax - LBA
+; bx - Buffer offset
+; Returns:
+; cf - set on error; clear otherwise
+; Preserves: bx, di, bp
+loadSectorLBA:
+			xor si, si														; Construct DAP on stack
+			push si															; Higher dword of LBA = 0
+			push si
+			push dx															; Lower dword of LBA
+			push ax
+			push es															; Buffer address
+			push bx
+			inc si															; Transfer one block
+			push si
+			mov cx, BIOS.DISK_DAP_SIZE										; Size of packet
+			push cx
+			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
+			mov si, sp														; Invoke int 13h extension
+			mov ah, BIOS.DISK_LBA_READ
+			int BIOS.DISK_INT												; Don't retry, as we assume that floppies don't support LBA
+.stackLoop	inc sp															; Clean stack (and conserve carry)
+			loop .stackLoop
 			ret
 
 
@@ -308,88 +404,16 @@ cn2lsn:
 %endif
 
 
-add16:
-			xor dx, dx
-add32:
-			add [BootSector.FIRST_DATA_CLUSTER], ax
-			adc [BootSector.FIRST_DATA_CLUSTER+0x0002], dx
-			ret
-
-
-loadSectorZero:
-			xor ax, ax
-			xor dx, dx
-; Load sector
-; dx:ax - LSN relative to [BootSector.FIRST_DATA_CLUSTER]
-; bx - Buffer offset
-; Returns:
-; cf - set on error; clear otherwise
-; Preserves: bx, di, bp
-loadSector:
-			add ax, [BootSector.FIRST_DATA_CLUSTER]							; Convert LSN to LBA
-			adc dx, [BootSector.FIRST_DATA_CLUSTER+0x0002]
-.patch		jnc short .chs
-.return		ret
-
-.chs		div word [BootSector.SECTORS_PER_CYLINDER]						; ax = cylinder = lba/sectorsPerCylinders, dx = blockInCylinder = lba%sectorsPerCylinders
-			mov ch, al														; Set cylinder number
-			xor al, al
-			times 2 shr ax, 1
-			mov cl, al
-
-			xchg ax, dx														; ax = head = blockInCylinder/headCount, dx = sector-1 = blockInCylinder%headCount
-			xor dx, dx
-			div word [sectorsPerTrack]
-			inc dx															; Store sector number
-			or cl, dl
-			mov dh, al														; Set head number
-			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
-
-			mov si, 0x0003													; Reset error counter
-.read			mov ax, BIOS.DISK_READ1										; Read sector (and guard against various int 13h bugs, http://www.ctyme.com/intr/rb-0607.htm)
-				push dx
-				stc
-				int BIOS.DISK_INT
-				sti
-				pop dx
-				jnc short .return
-
-.retry			dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
-				jz short .return
-				cbw															; Reset disk (set ah = 0)
-				int BIOS.DISK_INT
-				jmp short .read
-
-.lba		xor si, si														; Construct DAP on stack
-			push si															; Higher dword of LBA = 0
-			push si
-			push dx															; Lower dword of LBA
-			push ax
-			push es															; Buffer address
-			push bx
-			inc si															; Transfer one block
-			push si
-			mov cx, BIOS.DISK_DAP_SIZE										; Size of packet
-			push cx
-			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
-			mov si, sp														; Invoke int 13h extension
-			mov ah, BIOS.DISK_LBA_READ
-			int BIOS.DISK_INT												; Don't retry, as we assume that floppies don't support LBA
-.stackLoop	inc sp															; Clean stack (and conserve carry)
-			loop .stackLoop
-			ret
-
-
 %if FAT_TYPE != 32
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
 .end:
 %else
-errorMessage				db 'Error!', 0x0D, 0x0A
+errorMessage				;db 'Error!', 0x0D, 0x0A
 .end:
 %endif
 
 							times (BootSector.FILE_NAME-BootSector.BASE)-($-$$) db 0x00
 fileName					db 'LKLDR86 BIN'								; Filename to load
 loadOffset					dw 0x0600										; Load offset
-entryPoint						dw readFile										; Read function pointer
+entryPoint					dw readFile										; Read function pointer
 							dw BootSector.BOOT_SIGNATURE

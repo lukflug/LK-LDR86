@@ -67,21 +67,21 @@
 ; 0x07E00 |   size of loaded file   | BootSector.FILE_SIZE
 ; 0x07E01 |                         |
 ;         +-------------------------+
+; 0x07E02 |   int 13h boot drive    | BootSector.BOOT_DRIVE
+; 0x07E03 |                         |
+;         +-------------------------+
+; 0x07E04 |  sectors per cylinder   | BootSector.SECTORS_PER_CYLINDER
+; 0x07E05 |                         |
+;         +-------------------------+
+; 0x07E06 |    LSN of cluster 2     | BootSector.FIRST_DATA_CLUSTER
+; 0x07E07 |                         |
+; 0x07E08 |                         |
+; 0x07E09 |                         |
+;         +-------------------------+
 ;         |                         |
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 ;         ~~~~~~~~~~~~~~~~~~~~~~~~~~~
-;         |       ^^ stack ^^       |
-;         +-------------------------+
-; 0x07FF8 |   int 13h boot drive    | BootSector.BOOT_DRIVE
-; 0x07FF9 |                         |
-;         +-------------------------+
-; 0x07FFA |  sectors per cylinder   | BootSector.SECTORS_PER_CYLINDER
-; 0x07FFB |                         |
-;         +-------------------------+
-; 0x07FFC |    LSN of cluster 2     | BootSector.FIRST_DATA_CLUSTER
-; 0x07FFD |                         |
-; 0x07FFE |                         |
-; 0x07FFF |                         |
+; 0x07FFF |       ^^ stack ^^       |
 ;         +-------------------------+
 ;
 ; By calling BootSector.ENTRY_POINT, additional files may be loaded after the
@@ -116,8 +116,8 @@ BootSector:
 .ENTRY_POINT				equ .END-0x0004
 .SIGNATURE					equ .END-0x0002
 .FILE_SIZE					equ .END
+.BOOT_DRIVE					equ .END+0x0002
+.SECTORS_PER_CYLINDER		equ .END+0x0004
+.FIRST_DATA_CLUSTER      	equ .END+0x0006
 .STACK_BASE					equ .END+0x0200
-.BOOT_DRIVE					equ .STACK_BASE-0x0008
-.SECTORS_PER_CYLINDER		equ .STACK_BASE-0x0006
-.FIRST_DATA_CLUSTER			equ .STACK_BASE-0x0004
 .BOOT_SIGNATURE				equ 0xAA55
