@@ -4,7 +4,7 @@
 ; Loads a fragmented file on a FAT12, FAT16, or FAT32 partition. Assumes:
 ; - logical sector size = int 13h sector size
 ; - exactly two FATs
-; - directory entry of file located in first sector of root directory (i.e. first 32 entries)
+; - directory entry of file located in first sector of root directory (i.e. first 16 entries)
 ; - FAT chain of file is fully contained within the first sector of the FAT
 ; - everything must be below 2 TiB on the disk (analogous to MBR limit)
 ; - files must be loaded below 0x7800
@@ -154,8 +154,7 @@ loadFile:
 			lodsw
 			mov dx, [si]
 %endif
-			shl ax, 1
-			rcl dx, 1
+			call add32
 			call add32
 
 			mov bx, BootSector.DIR_BUFFER									; Load directory sector
@@ -408,7 +407,7 @@ cn2lsn:
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
 .end:
 %else
-errorMessage				db 'Err', 0x0D, 0x0A
+errorMessage				db 'Err!', 0x0D, 0x0A
 .end:
 %endif
 
