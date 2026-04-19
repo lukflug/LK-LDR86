@@ -208,19 +208,19 @@ readFile:
 .eof		pop ax															; Note jae = jnc and jb = jc
 			ret
 
-.found		mov ax, [bx+FATEntry.FIRST_CLUSTER]								; Get first cluster number
-%if FAT_TYPE == 32
-			lea si, [bx+FATEntry.FIRST_CLUSTER_HIGH]
-%endif
-			cmp word [bx+FATEntry.FILE_SIZE+0x0002], cx						; Check if file size is above 64k (cx = 0 from repe cmpsb)
+.found		mov bx, [di]													; Get load offset
+			cmp word [si-FATEntry.ATTRIBUTES+FATEntry.FILE_SIZE+0x0002], cx	; Check if file size is above 64k (cx = 0 from repe cmpsb)
 			jne short .error
-			mov di, [bx+FATEntry.FILE_SIZE]									; Get file size
+			mov di, [si-FATEntry.ATTRIBUTES+FATEntry.FILE_SIZE]				; Get file size
 			mov [BootSector.FILE_SIZE], di
-			mov bx, [loadOffset]											; Get load offset
 			add di, bx														; Save end of file in memory for later
 			jc short .error
 			cmp di, BootSector.DIR_BUFFER-SECTOR_SIZE						; Make sure file would not overwrite sector
 			ja short .error
+			mov ax, [si-FATEntry.ATTRIBUTES+FATEntry.FIRST_CLUSTER]			; Get first cluster number
+%if FAT_TYPE == 32
+			lea si, [si-FATEntry.ATTRIBUTES+FATEntry.FIRST_CLUSTER_HIGH]
+%endif
 
 .clusterLoop	push ax
 %if FAT_TYPE != 32
@@ -324,7 +324,7 @@ loadSectorCHS:
 				pop dx
 				jnc short .return
 
-.retry			dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
+				dec si														; Retry 3 times (due to motor spin-up of floppy drives, http://www.ctyme.com/intr/rb-0607.htm)
 				jz short .return
 				cbw															; Reset disk (set ah = 0)
 				int BIOS.DISK_INT
@@ -407,7 +407,7 @@ cn2lsn:
 errorMessage				db 'Error! Press any key to reboot ...', 0x0D, 0x0A
 .end:
 %else
-errorMessage				db 'Err!', 0x0D, 0x0A
+errorMessage				db 'Error!', 0x0D, 0x0A
 .end:
 %endif
 
