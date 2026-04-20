@@ -7,7 +7,7 @@
 
 use16
 cpu 8086
-org 0x0600
+org 0x0800
 
 			mov word [BootSector.LOAD_OFFSET], message						; Load after end of file
 			mov si, file													; Copy file name	

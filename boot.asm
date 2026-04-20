@@ -62,7 +62,7 @@ fileSystem					db 'FAT     '
 %endif
 
 
-; Set up segment registers and stack and calculate sectors per cylinder
+; Set up segment registers and stack
 ; Attempt to load file first using drive number passed by BIOS, then drive number in BPB
 ; If it fails, display error message, wait for key stroke, and run int 18h
 ; dl - boot drive number
@@ -413,5 +413,5 @@ errorMessage				db 'Error!', 0x0D, 0x0A
 
 							times (BootSector.FILE_NAME-BootSector.BASE)-($-$$) db 0x00
 fileName					db 'LKLDR86 BIN'								; Filename to load
-loadOffset					dw 0x0600										; Load offset
+loadOffset					dw 0x0800										; Load offset
 							dw BootSector.BOOT_SIGNATURE

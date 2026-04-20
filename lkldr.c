@@ -444,7 +444,7 @@ static void vbrinstall_usage(void) {
 		"Options:\n"
 		"  -h, --help                        display this help message\n"
 		"      --load-offset=<offset>        specify custom load offset (default:\n"
-		"                                    0x0600)\n"
+		"                                    0x0800)\n"
 		"      --oem-name[=<name>]           specify custom OEM name, or don't overwrite\n"
 		"                                    previous OEM name if no argument is passed\n"
 		"                                    (default: LKLDR86)\n"
