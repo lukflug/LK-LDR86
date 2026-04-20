@@ -2,7 +2,7 @@
 VERSION := 0.0.0
 BUILD := 0000
 
-ASM_SRC := lkldr86.asm
+ASM_SRC := mbr.asm lkldr86.asm
 BUILD_DIRS := img bin dep
 ASM_BIN := $(ASM_SRC:%.asm=bin/%.bin)
 BOOT_BIN := bin/boot12.bin bin/boot16.bin bin/boot32.bin
