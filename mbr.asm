@@ -167,7 +167,7 @@ loadVBR:
 
 .chs_ok		test cl, 0x3F													; Check if sector number is non-zero
 			jz short .error
-			mov di, 0x0003													; Reset error counter
+			mov di, 0x0004													; Reset error counter
 .read			mov bx, MBR.LOAD_BASE										; Read sector (and guard against various int 13h bugs, http://www.ctyme.com/intr/rb-0607.htm)
 				mov ax, BIOS.DISK_READ1
 				push dx
@@ -209,7 +209,7 @@ loadVBR:
 
 
 bootMessage					db 'Booting from partition '
-.number						db '0 ...', 0x0D, 0x0A
+.number						db '1 ...', 0x0D, 0x0A
 .end:
 noMessage					db 'No active partition found!'
 .end:

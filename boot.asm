@@ -315,7 +315,7 @@ loadSectorCHS:
 			mov dh, al														; Set head number
 			mov dl, [BootSector.BOOT_DRIVE]									; Set drive number
 
-			mov si, 0x0003													; Reset error counter
+			mov si, 0x0004													; Reset error counter
 .read			mov ax, BIOS.DISK_READ1										; Read sector (and guard against various int 13h bugs, http://www.ctyme.com/intr/rb-0607.htm)
 				push dx
 				stc
